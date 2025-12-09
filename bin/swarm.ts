@@ -17,7 +17,34 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
+
+// ============================================================================
+// ASCII Art & Branding
+// ============================================================================
+
+const BEE = `
+    \\ \` - ' /
+   - .(o o). -
+    (  >.<  )
+     /|   |\\
+    (_|   |_)  bzzzz...
+`;
+
+const BANNER = `
+ ███████╗██╗    ██╗ █████╗ ██████╗ ███╗   ███╗
+ ██╔════╝██║    ██║██╔══██╗██╔══██╗████╗ ████║
+ ███████╗██║ █╗ ██║███████║██████╔╝██╔████╔██║
+ ╚════██║██║███╗██║██╔══██║██╔══██╗██║╚██╔╝██║
+ ███████║╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║
+ ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝
+`;
+
+const TAGLINE = "Multi-agent coordination for OpenCode";
+
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 
 // ============================================================================
 // Types
@@ -560,27 +587,70 @@ async function init() {
 }
 
 function version() {
-  console.log("opencode-swarm-plugin v" + VERSION);
+  console.log(yellow(BANNER));
+  console.log(dim("  " + TAGLINE));
+  console.log();
+  console.log("  Version: " + VERSION);
+  console.log("  Docs:    https://github.com/joelhooks/opencode-swarm-plugin");
+  console.log();
+}
+
+function config() {
+  const configDir = join(homedir(), ".config", "opencode");
+  const pluginPath = join(configDir, "plugins", "swarm.ts");
+  const commandPath = join(configDir, "commands", "swarm.md");
+  const agentPath = join(configDir, "agents", "swarm-planner.md");
+
+  console.log(yellow(BANNER));
+  console.log(dim("  " + TAGLINE + " v" + VERSION));
+  console.log();
+  console.log(cyan("Config Files:"));
+  console.log();
+
+  const files = [
+    { path: pluginPath, desc: "Plugin loader", emoji: "🔌" },
+    { path: commandPath, desc: "/swarm command prompt", emoji: "📜" },
+    { path: agentPath, desc: "@swarm-planner agent", emoji: "🤖" },
+  ];
+
+  for (const { path, desc, emoji } of files) {
+    const exists = existsSync(path);
+    const status = exists ? "✓" : "✗";
+    const color = exists ? "\x1b[32m" : "\x1b[31m";
+    console.log(`  ${emoji} ${desc}`);
+    console.log(`     ${color}${status}\x1b[0m ${dim(path)}`);
+    console.log();
+  }
+
+  console.log(dim("Edit these files to customize swarm behavior."));
+  console.log(dim("Run 'swarm setup' to regenerate defaults."));
+  console.log();
 }
 
 function help() {
+  console.log(yellow(BANNER));
+  console.log(dim("  " + TAGLINE + " v" + VERSION));
+  console.log(cyan(BEE));
   console.log(`
-opencode-swarm-plugin v${VERSION}
+${cyan("Commands:")}
+  swarm setup     Interactive installer - checks and installs dependencies
+  swarm doctor    Health check - shows status of all dependencies
+  swarm init      Initialize beads in current project
+  swarm config    Show paths to generated config files
+  swarm version   Show version and banner
+  swarm help      Show this help
 
-Multi-agent swarm coordination for OpenCode.
-
-Commands:
-  swarm setup    Interactive installer - checks and installs dependencies
-  swarm doctor   Health check - shows status of all dependencies  
-  swarm init     Initialize beads in current project
-  swarm version  Show version
-  swarm help     Show this help
-
-After setup, use in OpenCode:
+${cyan("Usage in OpenCode:")}
   /swarm "Add user authentication with OAuth"
-  @swarm-planner "Refactor components to use hooks"
+  @swarm-planner "Refactor all components to use hooks"
 
-Documentation: https://github.com/joelhooks/opencode-swarm-plugin
+${cyan("Customization:")}
+  Edit the generated files to customize behavior:
+  ${dim("~/.config/opencode/commands/swarm.md")}    - /swarm command prompt
+  ${dim("~/.config/opencode/agents/swarm-planner.md")} - @swarm-planner agent
+  ${dim("~/.config/opencode/plugins/swarm.ts")}     - Plugin loader
+
+${dim("Docs: https://github.com/joelhooks/opencode-swarm-plugin")}
 `);
 }
 
@@ -599,6 +669,9 @@ switch (command) {
     break;
   case "init":
     await init();
+    break;
+  case "config":
+    config();
     break;
   case "version":
   case "--version":
