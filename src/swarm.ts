@@ -420,8 +420,18 @@ export function selectStrategy(task: string): {
   for (const [strategyName, definition] of Object.entries(STRATEGIES)) {
     const name = strategyName as Exclude<DecompositionStrategy, "auto">;
     for (const keyword of definition.keywords) {
-      if (taskLower.includes(keyword)) {
-        scores[name] += 1;
+      // Use word boundary matching to avoid "debug" matching "bug"
+      // For multi-word keywords, just check includes (they're specific enough)
+      if (keyword.includes(" ")) {
+        if (taskLower.includes(keyword)) {
+          scores[name] += 1;
+        }
+      } else {
+        // Single word: use word boundary regex
+        const regex = new RegExp(`\\b${keyword}\\b`, "i");
+        if (regex.test(taskLower)) {
+          scores[name] += 1;
+        }
       }
     }
   }
