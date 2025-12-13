@@ -49,7 +49,7 @@ For each subtask:
 ### 4. Progress Monitoring
 
 - Check `beads_query(status="in_progress")` for active work
-- Check `agentmail_inbox()` for worker messages
+- Check `swarmmail_inbox()` for worker messages
 - Intervene on blockers (see Intervention Patterns below)
 
 ### 5. Completion & Aggregation

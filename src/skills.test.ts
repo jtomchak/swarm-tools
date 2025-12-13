@@ -358,6 +358,200 @@ describe("ES module compatibility", () => {
 });
 
 // ============================================================================
+// Tests: CSO Validation
+// ============================================================================
+
+import { validateCSOCompliance } from "./skills";
+
+describe("validateCSOCompliance", () => {
+  describe("description validation", () => {
+    it("passes for CSO-compliant description with 'Use when'", () => {
+      const warnings = validateCSOCompliance(
+        "testing-async",
+        "Use when tests have race conditions - replaces arbitrary timeouts with condition polling",
+      );
+
+      expect(warnings.critical).toHaveLength(0);
+      expect(warnings.suggestions).toHaveLength(0);
+    });
+
+    it("warns when missing 'Use when...' pattern", () => {
+      const warnings = validateCSOCompliance(
+        "testing-async",
+        "For async testing patterns",
+      );
+
+      expect(warnings.critical).toContain(
+        "Description should include 'Use when...' to focus on triggering conditions",
+      );
+    });
+
+    it("warns for first-person voice", () => {
+      const warnings = validateCSOCompliance(
+        "testing-async",
+        "I can help you with async tests when I detect race conditions",
+      );
+
+      expect(warnings.critical.some((w) => w.includes("first-person"))).toBe(
+        true,
+      );
+    });
+
+    it("warns for second-person voice", () => {
+      const warnings = validateCSOCompliance(
+        "testing-async",
+        "Use when you need to test async code and your tests have race conditions",
+      );
+
+      expect(warnings.critical.some((w) => w.includes("second-person"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects description > 1024 chars", () => {
+      const longDesc = "a".repeat(1025);
+      const warnings = validateCSOCompliance("test", longDesc);
+
+      expect(
+        warnings.critical.some(
+          (w) => w.includes("1025") && w.includes("max 1024"),
+        ),
+      ).toBe(true);
+    });
+
+    it("suggests improvement for description > 500 chars", () => {
+      const mediumDesc = "Use when testing. " + "a".repeat(490);
+      const warnings = validateCSOCompliance("test", mediumDesc);
+
+      expect(warnings.critical).toHaveLength(0); // Not critical
+      expect(warnings.suggestions.some((w) => w.includes("aim for <500"))).toBe(
+        true,
+      );
+    });
+
+    it("accepts description < 500 chars with no length warnings", () => {
+      const shortDesc =
+        "Use when tests have race conditions - replaces timeouts";
+      const warnings = validateCSOCompliance("testing-async", shortDesc);
+
+      const hasLengthWarning =
+        warnings.critical.some((w) => w.includes("chars")) ||
+        warnings.suggestions.some((w) => w.includes("chars"));
+
+      expect(hasLengthWarning).toBe(false);
+    });
+  });
+
+  describe("name validation", () => {
+    it("accepts gerund-based names", () => {
+      const warnings = validateCSOCompliance(
+        "testing-async",
+        "Use when testing async code",
+      );
+
+      const hasNameWarning = warnings.suggestions.some((w) =>
+        w.includes("verb-first"),
+      );
+      expect(hasNameWarning).toBe(false);
+    });
+
+    it("accepts verb-first names", () => {
+      const warnings = validateCSOCompliance(
+        "validate-schemas",
+        "Use when validating schemas",
+      );
+
+      const hasNameWarning = warnings.suggestions.some((w) =>
+        w.includes("verb-first"),
+      );
+      expect(hasNameWarning).toBe(false);
+    });
+
+    it("accepts action verbs", () => {
+      const actionVerbs = [
+        "test-runner",
+        "debug-tools",
+        "scan-code",
+        "check-types",
+        "build-artifacts",
+      ];
+
+      for (const name of actionVerbs) {
+        const warnings = validateCSOCompliance(name, "Use when testing");
+        const hasNameWarning = warnings.suggestions.some((w) =>
+          w.includes("verb-first"),
+        );
+        expect(hasNameWarning).toBe(false);
+      }
+    });
+
+    it("suggests verb-first for noun-first names", () => {
+      const warnings = validateCSOCompliance(
+        "async-test",
+        "Use when testing async",
+      );
+
+      expect(
+        warnings.suggestions.some((w) =>
+          w.includes("doesn't follow verb-first"),
+        ),
+      ).toBe(true);
+    });
+
+    it("warns for name > 64 chars", () => {
+      const longName = "a".repeat(65);
+      const warnings = validateCSOCompliance(longName, "Use when testing");
+
+      expect(warnings.critical.some((w) => w.includes("64 character"))).toBe(
+        true,
+      );
+    });
+
+    it("warns for invalid name format", () => {
+      const warnings = validateCSOCompliance(
+        "Invalid_Name",
+        "Use when testing",
+      );
+
+      expect(
+        warnings.critical.some((w) =>
+          w.includes("lowercase letters, numbers, and hyphens"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("comprehensive examples", () => {
+    it("perfect CSO compliance", () => {
+      const warnings = validateCSOCompliance(
+        "testing-race-conditions",
+        "Use when tests have race conditions - replaces arbitrary timeouts with condition polling and retry logic",
+      );
+
+      expect(warnings.critical).toHaveLength(0);
+      expect(warnings.suggestions).toHaveLength(0);
+    });
+
+    it("multiple critical issues", () => {
+      const warnings = validateCSOCompliance(
+        "BadName_123",
+        "I can help you test async code when you need to avoid race conditions. " +
+          "a".repeat(1000),
+      );
+
+      expect(warnings.critical.length).toBeGreaterThan(2);
+      expect(warnings.critical.some((w) => w.includes("first-person"))).toBe(
+        true,
+      );
+      expect(warnings.critical.some((w) => w.includes("second-person"))).toBe(
+        true,
+      );
+      expect(warnings.critical.some((w) => w.includes("lowercase"))).toBe(true);
+    });
+  });
+});
+
+// ============================================================================
 // Tests: Edge Cases
 // ============================================================================
 

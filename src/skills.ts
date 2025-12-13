@@ -628,6 +628,167 @@ Use this to access supplementary skill resources.`,
  */
 const DEFAULT_SKILLS_DIR = ".opencode/skills";
 
+// =============================================================================
+// CSO (Claude Search Optimization) Validation
+// =============================================================================
+
+/**
+ * CSO validation warnings for skill metadata
+ */
+export interface CSOValidationWarnings {
+  /** Critical warnings (strong indicators of poor discoverability) */
+  critical: string[];
+  /** Suggestions for improvement */
+  suggestions: string[];
+}
+
+/**
+ * Validate skill metadata against Claude Search Optimization best practices
+ *
+ * Checks:
+ * - 'Use when...' format in description
+ * - Description length (warn > 500, max 1024)
+ * - Third-person voice (no 'I', 'you')
+ * - Name conventions (verb-first, gerunds, hyphens)
+ *
+ * @returns Warnings object with critical issues and suggestions
+ */
+export function validateCSOCompliance(
+  name: string,
+  description: string,
+): CSOValidationWarnings {
+  const warnings: CSOValidationWarnings = {
+    critical: [],
+    suggestions: [],
+  };
+
+  // Description: Check for 'Use when...' pattern
+  const hasUseWhen = /\buse when\b/i.test(description);
+  if (!hasUseWhen) {
+    warnings.critical.push(
+      "Description should include 'Use when...' to focus on triggering conditions",
+    );
+  }
+
+  // Description: Length checks
+  if (description.length > 1024) {
+    warnings.critical.push(
+      `Description is ${description.length} chars (max 1024) - will be rejected`,
+    );
+  } else if (description.length > 500) {
+    warnings.suggestions.push(
+      `Description is ${description.length} chars (aim for <500 for optimal discoverability)`,
+    );
+  }
+
+  // Description: Third-person check (no 'I', 'you')
+  const firstPersonPattern = /\b(I|I'm|I'll|my|mine|myself)\b/i;
+  const secondPersonPattern = /\b(you|you're|you'll|your|yours|yourself)\b/i;
+
+  if (firstPersonPattern.test(description)) {
+    warnings.critical.push(
+      "Description uses first-person ('I', 'my') - skills are injected into system prompt, use third-person only",
+    );
+  }
+
+  if (secondPersonPattern.test(description)) {
+    warnings.critical.push(
+      "Description uses second-person ('you', 'your') - use third-person voice (e.g., 'Handles X' not 'You can handle X')",
+    );
+  }
+
+  // Name: Check for verb-first/gerund patterns
+  const nameWords = name.split("-");
+  const firstWord = nameWords[0];
+
+  // Common gerund endings: -ing
+  // Common verb forms: -ing, -ize, -ify, -ate
+  const isGerund = /ing$/.test(firstWord);
+  const isVerbForm = /(ing|ize|ify|ate)$/.test(firstWord);
+
+  if (!isGerund && !isVerbForm) {
+    // Check if it's a common action verb
+    const actionVerbs = [
+      "test",
+      "debug",
+      "fix",
+      "scan",
+      "check",
+      "validate",
+      "create",
+      "build",
+      "deploy",
+      "run",
+      "load",
+      "fetch",
+      "parse",
+    ];
+    const startsWithAction = actionVerbs.includes(firstWord);
+
+    if (!startsWithAction) {
+      warnings.suggestions.push(
+        `Name '${name}' doesn't follow verb-first pattern. Consider gerunds (e.g., 'testing-skills' not 'test-skill') or action verbs for better clarity`,
+      );
+    }
+  }
+
+  // Name: Check length
+  if (name.length > 64) {
+    warnings.critical.push(
+      `Name exceeds 64 character limit (${name.length} chars)`,
+    );
+  }
+
+  // Name: Validate format (already enforced by schema, but good to document)
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    warnings.critical.push(
+      "Name must be lowercase letters, numbers, and hyphens only",
+    );
+  }
+
+  return warnings;
+}
+
+/**
+ * Format CSO warnings into a readable message for tool output
+ */
+function formatCSOWarnings(warnings: CSOValidationWarnings): string | null {
+  if (warnings.critical.length === 0 && warnings.suggestions.length === 0) {
+    return null;
+  }
+
+  const parts: string[] = [];
+
+  if (warnings.critical.length > 0) {
+    parts.push("**CSO Critical Issues:**");
+    for (const warning of warnings.critical) {
+      parts.push(`  ⚠️  ${warning}`);
+    }
+  }
+
+  if (warnings.suggestions.length > 0) {
+    parts.push("\n**CSO Suggestions:**");
+    for (const suggestion of warnings.suggestions) {
+      parts.push(`  💡 ${suggestion}`);
+    }
+  }
+
+  parts.push("\n**CSO Guide:**");
+  parts.push(
+    "  • Start description with 'Use when...' (focus on triggering conditions)",
+  );
+  parts.push("  • Keep description <500 chars (max 1024)");
+  parts.push("  • Use third-person voice only (injected into system prompt)");
+  parts.push(
+    "  • Name: verb-first or gerunds (e.g., 'testing-async' not 'async-test')",
+  );
+  parts.push(
+    "\n  Example: 'Use when tests have race conditions - replaces arbitrary timeouts with condition polling'",
+  );
+
+  return parts.join("\n");
+}
+
 /**
  * Quote a YAML scalar if it contains special characters
  * Uses double quotes and escapes internal quotes/newlines
@@ -749,6 +910,9 @@ Good skills have:
       return `Skill '${args.name}' already exists at ${existing.path}. Use skills_update to modify it.`;
     }
 
+    // Validate CSO compliance (advisory warnings only)
+    const csoWarnings = validateCSOCompliance(args.name, args.description);
+
     // Determine target directory
     let skillDir: string;
     if (args.directory === "global") {
@@ -778,21 +942,26 @@ Good skills have:
       // Invalidate cache so new skill is discoverable
       invalidateSkillsCache();
 
-      return JSON.stringify(
-        {
-          success: true,
-          skill: args.name,
-          path: skillPath,
-          message: `Created skill '${args.name}'. It's now discoverable via skills_list.`,
-          next_steps: [
-            "Test with skills_use to verify instructions are clear",
-            "Add examples.md or reference.md for supplementary content",
-            "Add scripts/ directory for executable helpers",
-          ],
-        },
-        null,
-        2,
-      );
+      // Build response with CSO warnings if present
+      const response: Record<string, unknown> = {
+        success: true,
+        skill: args.name,
+        path: skillPath,
+        message: `Created skill '${args.name}'. It's now discoverable via skills_list.`,
+        next_steps: [
+          "Test with skills_use to verify instructions are clear",
+          "Add examples.md or reference.md for supplementary content",
+          "Add scripts/ directory for executable helpers",
+        ],
+      };
+
+      // Add CSO warnings if any
+      const warningsMessage = formatCSOWarnings(csoWarnings);
+      if (warningsMessage) {
+        response.cso_warnings = warningsMessage;
+      }
+
+      return JSON.stringify(response, null, 2);
     } catch (error) {
       return `Failed to create skill: ${error instanceof Error ? error.message : String(error)}`;
     }

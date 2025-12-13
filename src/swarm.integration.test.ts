@@ -1231,10 +1231,10 @@ describe("Graceful Degradation", () => {
       mockContext,
     );
 
-    // Check that agent-mail discipline is in the prompt
+    // Check that swarm-mail discipline is in the prompt
     expect(result).toContain("MANDATORY");
-    expect(result).toContain("Agent Mail");
-    expect(result).toContain("agentmail_send");
+    expect(result).toContain("Swarm Mail");
+    expect(result).toContain("swarmmail_send");
     expect(result).toContain("Report progress");
   });
 });
@@ -1243,7 +1243,7 @@ describe("Graceful Degradation", () => {
 // Coordinator-Centric Swarm Tools (V2)
 // ============================================================================
 
-describe("Swarm Prompt V2 (with Agent Mail/Beads)", () => {
+describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
   describe("formatSubtaskPromptV2", () => {
     it("generates correct prompt with all fields", () => {
       const result = formatSubtaskPromptV2({

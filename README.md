@@ -116,12 +116,12 @@ $ARGUMENTS
 
 ## Workflow
 
-1. **Initialize**: `agentmail_init` with project_path and task_description
+1. **Initialize**: `swarmmail_init` with project_path and task_description
 2. **Decompose**: Use `swarm_select_strategy` then `swarm_plan_prompt`
 3. **Create beads**: `beads_create_epic` with subtasks and file assignments
-4. **Reserve files**: `agentmail_reserve` for each subtask's files
+4. **Reserve files**: `swarmmail_reserve` for each subtask's files
 5. **Spawn agents**: Use Task tool with `swarm_spawn_subtask` prompts
-6. **Monitor**: Check `agentmail_inbox` for progress
+6. **Monitor**: Check `swarmmail_inbox` for progress
 7. **Complete**: `swarm_complete` when done, then `beads_sync` to push
 
 ## Strategy Selection
@@ -350,20 +350,9 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/m
 | `swarmmail_ack`          | Acknowledge message                           |
 | `swarmmail_health`       | Check embedded database health                |
 
-### Agent Mail (Legacy MCP - Optional)
+### Agent Mail (Deprecated - Use Swarm Mail)
 
-| Tool                         | Description                                    |
-| ---------------------------- | ---------------------------------------------- |
-| `agentmail_init`             | Initialize session, register agent             |
-| `agentmail_send`             | Send message to agents                         |
-| `agentmail_inbox`            | Fetch inbox (max 5, no bodies - context safe)  |
-| `agentmail_read_message`     | Fetch single message body by ID                |
-| `agentmail_summarize_thread` | Summarize thread (preferred over fetching all) |
-| `agentmail_reserve`          | Reserve file paths for exclusive editing       |
-| `agentmail_release`          | Release file reservations                      |
-| `agentmail_ack`              | Acknowledge message                            |
-| `agentmail_search`           | Search messages by keyword                     |
-| `agentmail_health`           | Check if MCP Agent Mail server is running      |
+> **Note:** Agent Mail tools (`agentmail_*`) have been removed in v0.14.0. Use `swarmmail_*` tools instead. The embedded Swarm Mail provides the same functionality without requiring an external MCP server.
 
 ## Event-Sourced Architecture (Embedded)
 
@@ -409,7 +398,7 @@ plugin tools → streams/agent-mail.ts → streams/store.ts → PGLite (in-proce
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Plugin Tools Layer                        │
-│  (agentmail_init, agentmail_send, agentmail_reserve, etc.)      │
+│  (swarmmail_init, swarmmail_send, swarmmail_reserve, etc.)      │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼

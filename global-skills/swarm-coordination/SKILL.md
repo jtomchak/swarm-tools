@@ -95,29 +95,75 @@ skills_list();
 
 Synthesize findings into `shared_context` for workers.
 
-### Phase 3: Decomposition
+### Phase 3: Decomposition (DELEGATE TO SUBAGENT)
+
+> **⚠️ CRITICAL: Context Preservation Pattern**
+>
+> **NEVER do planning inline in the coordinator thread.** Decomposition work (file reading, CASS searching, reasoning about task breakdown) consumes massive amounts of context and will exhaust your token budget on long swarms.
+>
+> **ALWAYS delegate planning to a `swarm/planner` subagent** and receive only the structured BeadTree JSON result back.
+
+**❌ Anti-Pattern (Context-Heavy):**
 
 ```typescript
-// Auto-select strategy and generate decomposition prompt
-const plan = await swarm_plan_prompt({
-  task: "Add user authentication with OAuth",
-  max_subtasks: 5,
-  query_cass: true, // searches history
-  include_skills: true, // lists relevant skills
+// DON'T DO THIS - pollutes main thread context
+const plan = await swarm_plan_prompt({ task, ... });
+// ... agent reasons about decomposition inline ...
+// ... context fills with file contents, analysis ...
+const validation = await swarm_validate_decomposition({ ... });
+```
+
+**✅ Correct Pattern (Context-Lean):**
+
+```typescript
+// 1. Create planning bead with full context
+await beads_create({
+  title: `Plan: ${taskTitle}`,
+  type: "task",
+  description: `Decompose into subtasks. Context: ${synthesizedContext}`,
 });
 
-// Agent responds with BeadTree JSON, then validate
-const validation = await swarm_validate_decomposition({
-  response: agentResponse,
+// 2. Delegate to swarm/planner subagent
+const planningResult = await Task({
+  subagent_type: "swarm/planner",
+  description: `Decompose task: ${taskTitle}`,
+  prompt: `
+You are a swarm planner. Generate a BeadTree for this task.
+
+## Task
+${taskDescription}
+
+## Synthesized Context
+${synthesizedContext}
+
+## Instructions
+1. Use swarm_plan_prompt(task="...", max_subtasks=5, query_cass=true)
+2. Reason about decomposition strategy
+3. Generate BeadTree JSON
+4. Validate with swarm_validate_decomposition
+5. Return ONLY the validated BeadTree JSON (no analysis, no file contents)
+
+Output format: Valid BeadTree JSON only.
+  `,
 });
 
-// Create epic + subtasks atomically
+// 3. Parse result (subagent already validated)
+const beadTree = JSON.parse(planningResult);
+
+// 4. Create epic + subtasks atomically
 await beads_create_epic({
-  epic_title: "Add OAuth Authentication",
-  epic_description: "...",
-  subtasks: validation.subtasks,
+  epic_title: beadTree.epic.title,
+  epic_description: beadTree.epic.description,
+  subtasks: beadTree.subtasks,
 });
 ```
+
+**Why This Matters:**
+
+- **Main thread context stays clean** - only receives final JSON, not reasoning
+- **Subagent context is disposable** - gets garbage collected after planning
+- **Scales to long swarms** - coordinator can manage 10+ workers without exhaustion
+- **Faster coordination** - less context = faster responses when monitoring workers
 
 ### Phase 4: Reserve Files (via Swarm Mail)
 
@@ -263,12 +309,16 @@ One blocker affects multiple subtasks.
 
 ## Anti-Patterns
 
-| Anti-Pattern         | Symptom                          | Fix                           |
-| -------------------- | -------------------------------- | ----------------------------- |
-| **Mega-Coordinator** | Coordinator editing files        | Coordinator only orchestrates |
-| **Silent Swarm**     | No communication, late conflicts | Require updates, check inbox  |
-| **Over-Decomposed**  | 10 subtasks for 20 lines         | 2-5 subtasks max              |
-| **Under-Specified**  | "Implement backend"              | Clear goal, files, criteria   |
+| Anti-Pattern             | Symptom                                    | Fix                                  |
+| ------------------------ | ------------------------------------------ | ------------------------------------ |
+| **Mega-Coordinator**     | Coordinator editing files                  | Coordinator only orchestrates        |
+| **Silent Swarm**         | No communication, late conflicts           | Require updates, check inbox         |
+| **Over-Decomposed**      | 10 subtasks for 20 lines                   | 2-5 subtasks max                     |
+| **Under-Specified**      | "Implement backend"                        | Clear goal, files, criteria          |
+| **Inline Planning** ⚠️   | Context pollution, exhaustion on long runs | Delegate planning to subagent        |
+| **Heavy File Reading**   | Coordinator reading 10+ files              | Subagent reads, returns summary only |
+| **Deep CASS Drilling**   | Multiple cass_search calls inline          | Subagent searches, summarizes        |
+| **Manual Decomposition** | Hand-crafting subtasks without validation  | Use swarm_plan_prompt + validation   |
 
 ## Shared Context Template
 

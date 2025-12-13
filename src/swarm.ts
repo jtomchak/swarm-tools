@@ -629,7 +629,7 @@ You MUST keep your bead updated as you work:
 
 **Never work silently.** Your bead status is how the swarm tracks progress.
 
-## MANDATORY: Agent Mail Communication
+## MANDATORY: Swarm Mail Communication
 
 You MUST communicate with other agents:
 
@@ -638,9 +638,9 @@ You MUST communicate with other agents:
 3. **Announce blockers** immediately - don't spin trying to fix alone
 4. **Coordinate on shared concerns** - if you see something affecting other agents, say so
 
-Use Agent Mail for all communication:
+Use Swarm Mail for all communication:
 \`\`\`
-agentmail_send(
+swarmmail_send(
   to: ["coordinator" or specific agent],
   subject: "Brief subject",
   body: "Message content",
@@ -652,7 +652,7 @@ agentmail_send(
 
 1. **Start**: Your bead is already marked in_progress
 2. **Progress**: Use swarm_progress to report status updates
-3. **Blocked**: Report immediately via Agent Mail - don't spin
+3. **Blocked**: Report immediately via Swarm Mail - don't spin
 4. **Complete**: Use swarm_complete when done - it handles:
    - Closing your bead with a summary
    - Releasing file reservations
@@ -674,15 +674,15 @@ Before writing code:
 1. **Read the files** you're assigned to understand current state
 2. **Plan your approach** - what changes, in what order?
 3. **Identify risks** - what could go wrong? What dependencies?
-4. **Communicate your plan** via Agent Mail if non-trivial
+4. **Communicate your plan** via Swarm Mail if non-trivial
 
 Begin work on your subtask now.`;
 
 /**
- * Streamlined subtask prompt (V2) - still uses Agent Mail and beads
+ * Streamlined subtask prompt (V2) - uses Swarm Mail and beads
  *
  * This is a cleaner version of SUBTASK_PROMPT that's easier to parse.
- * Agents MUST use Agent Mail for communication and beads for tracking.
+ * Agents MUST use Swarm Mail for communication and beads for tracking.
  *
  * Supports {error_context} placeholder for retry prompts.
  */
@@ -3157,3 +3157,183 @@ export const swarmTools = {
   swarm_get_error_context: swarm_get_error_context,
   swarm_resolve_error: swarm_resolve_error,
 };
+
+// ============================================================================
+// 3-Strike Detection
+// ============================================================================
+
+/**
+ * Global strike storage for tracking consecutive fix failures
+ */
+import {
+  InMemoryStrikeStorage,
+  addStrike,
+  getStrikes,
+  isStrikedOut,
+  getArchitecturePrompt,
+  clearStrikes,
+  type StrikeStorage,
+} from "./learning";
+
+const globalStrikeStorage: StrikeStorage = new InMemoryStrikeStorage();
+
+/**
+ * Check if a bead has struck out (3 consecutive failures)
+ *
+ * The 3-Strike Rule:
+ * IF 3+ fixes have failed:
+ *   STOP → Question the architecture
+ *   DON'T attempt Fix #4
+ *   Discuss with human partner
+ *
+ * This is NOT a failed hypothesis.
+ * This is a WRONG ARCHITECTURE.
+ *
+ * Use this tool to:
+ * - Check strike count before attempting a fix
+ * - Get architecture review prompt if struck out
+ * - Record a strike when a fix fails
+ * - Clear strikes when a fix succeeds
+ */
+export const swarm_check_strikes = tool({
+  description:
+    "Check 3-strike status for a bead. Records failures, detects architectural problems, generates architecture review prompts.",
+  args: {
+    bead_id: tool.schema.string().describe("Bead ID to check"),
+    action: tool.schema
+      .enum(["check", "add_strike", "clear", "get_prompt"])
+      .describe(
+        "Action: check count, add strike, clear strikes, or get prompt",
+      ),
+    attempt: tool.schema
+      .string()
+      .optional()
+      .describe("Description of fix attempt (required for add_strike)"),
+    reason: tool.schema
+      .string()
+      .optional()
+      .describe("Why the fix failed (required for add_strike)"),
+  },
+  async execute(args) {
+    switch (args.action) {
+      case "check": {
+        const count = await getStrikes(args.bead_id, globalStrikeStorage);
+        const strikedOut = await isStrikedOut(
+          args.bead_id,
+          globalStrikeStorage,
+        );
+
+        return JSON.stringify(
+          {
+            bead_id: args.bead_id,
+            strike_count: count,
+            is_striked_out: strikedOut,
+            message: strikedOut
+              ? "⚠️ STRUCK OUT: 3 strikes reached. Use get_prompt action for architecture review."
+              : count === 0
+                ? "No strikes. Clear to proceed."
+                : `${count} strike${count > 1 ? "s" : ""}. ${3 - count} remaining before architecture review required.`,
+            next_action: strikedOut
+              ? "Call with action=get_prompt to get architecture review questions"
+              : "Continue with fix attempt",
+          },
+          null,
+          2,
+        );
+      }
+
+      case "add_strike": {
+        if (!args.attempt || !args.reason) {
+          return JSON.stringify(
+            {
+              error: "add_strike requires 'attempt' and 'reason' parameters",
+            },
+            null,
+            2,
+          );
+        }
+
+        const record = await addStrike(
+          args.bead_id,
+          args.attempt,
+          args.reason,
+          globalStrikeStorage,
+        );
+
+        const strikedOut = record.strike_count >= 3;
+
+        return JSON.stringify(
+          {
+            bead_id: args.bead_id,
+            strike_count: record.strike_count,
+            is_striked_out: strikedOut,
+            failures: record.failures,
+            message: strikedOut
+              ? "⚠️ STRUCK OUT: 3 strikes reached. STOP and question the architecture."
+              : `Strike ${record.strike_count} recorded. ${3 - record.strike_count} remaining.`,
+            warning: strikedOut
+              ? "DO NOT attempt Fix #4. Call with action=get_prompt for architecture review."
+              : undefined,
+          },
+          null,
+          2,
+        );
+      }
+
+      case "clear": {
+        await clearStrikes(args.bead_id, globalStrikeStorage);
+
+        return JSON.stringify(
+          {
+            bead_id: args.bead_id,
+            strike_count: 0,
+            is_striked_out: false,
+            message: "Strikes cleared. Fresh start.",
+          },
+          null,
+          2,
+        );
+      }
+
+      case "get_prompt": {
+        const prompt = await getArchitecturePrompt(
+          args.bead_id,
+          globalStrikeStorage,
+        );
+
+        if (!prompt) {
+          return JSON.stringify(
+            {
+              bead_id: args.bead_id,
+              has_prompt: false,
+              message: "No architecture prompt (not struck out yet)",
+            },
+            null,
+            2,
+          );
+        }
+
+        return JSON.stringify(
+          {
+            bead_id: args.bead_id,
+            has_prompt: true,
+            architecture_review_prompt: prompt,
+            message:
+              "Architecture review required. Present this prompt to the human partner.",
+          },
+          null,
+          2,
+        );
+      }
+
+      default:
+        return JSON.stringify(
+          {
+            error: `Unknown action: ${args.action}`,
+          },
+          null,
+          2,
+        );
+    }
+  },
+});

@@ -1427,3 +1427,313 @@ describe("Storage Module", () => {
     });
   });
 });
+
+// ============================================================================
+// 3-Strike Detection Tests
+// ============================================================================
+
+import {
+  InMemoryStrikeStorage,
+  addStrike,
+  getStrikes,
+  isStrikedOut,
+  getArchitecturePrompt,
+  clearStrikes,
+  type StrikeStorage,
+} from "./learning";
+
+describe("3-Strike Detection", () => {
+  let storage: StrikeStorage;
+
+  beforeEach(() => {
+    storage = new InMemoryStrikeStorage();
+  });
+
+  describe("addStrike", () => {
+    it("records first strike", async () => {
+      const record = await addStrike(
+        "test-bead-1",
+        "Attempted null check fix",
+        "Still getting undefined errors",
+        storage,
+      );
+
+      expect(record.bead_id).toBe("test-bead-1");
+      expect(record.strike_count).toBe(1);
+      expect(record.failures).toHaveLength(1);
+      expect(record.failures[0].attempt).toBe("Attempted null check fix");
+      expect(record.failures[0].reason).toBe("Still getting undefined errors");
+      expect(record.first_strike_at).toBeDefined();
+      expect(record.last_strike_at).toBeDefined();
+    });
+
+    it("increments strike count on subsequent strikes", async () => {
+      await addStrike("test-bead-2", "Fix 1", "Failed 1", storage);
+      const record2 = await addStrike(
+        "test-bead-2",
+        "Fix 2",
+        "Failed 2",
+        storage,
+      );
+
+      expect(record2.strike_count).toBe(2);
+      expect(record2.failures).toHaveLength(2);
+    });
+
+    it("caps strike count at 3", async () => {
+      await addStrike("test-bead-3", "Fix 1", "Failed 1", storage);
+      await addStrike("test-bead-3", "Fix 2", "Failed 2", storage);
+      await addStrike("test-bead-3", "Fix 3", "Failed 3", storage);
+      const record4 = await addStrike(
+        "test-bead-3",
+        "Fix 4",
+        "Failed 4",
+        storage,
+      );
+
+      expect(record4.strike_count).toBe(3);
+      expect(record4.failures).toHaveLength(4); // Records all attempts
+    });
+
+    it("preserves first_strike_at timestamp", async () => {
+      const record1 = await addStrike(
+        "test-bead-4",
+        "Fix 1",
+        "Failed 1",
+        storage,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const record2 = await addStrike(
+        "test-bead-4",
+        "Fix 2",
+        "Failed 2",
+        storage,
+      );
+
+      expect(record2.first_strike_at).toBe(record1.first_strike_at);
+      expect(record2.last_strike_at).not.toBe(record1.last_strike_at);
+    });
+  });
+
+  describe("getStrikes", () => {
+    it("returns 0 for bead with no strikes", async () => {
+      const count = await getStrikes("no-strikes-bead", storage);
+      expect(count).toBe(0);
+    });
+
+    it("returns correct strike count", async () => {
+      await addStrike("bead-with-strikes", "Fix 1", "Failed 1", storage);
+      await addStrike("bead-with-strikes", "Fix 2", "Failed 2", storage);
+
+      const count = await getStrikes("bead-with-strikes", storage);
+      expect(count).toBe(2);
+    });
+  });
+
+  describe("isStrikedOut", () => {
+    it("returns false for bead with < 3 strikes", async () => {
+      await addStrike("bead-safe", "Fix 1", "Failed 1", storage);
+      await addStrike("bead-safe", "Fix 2", "Failed 2", storage);
+
+      const strikedOut = await isStrikedOut("bead-safe", storage);
+      expect(strikedOut).toBe(false);
+    });
+
+    it("returns true for bead with 3 strikes", async () => {
+      await addStrike("bead-danger", "Fix 1", "Failed 1", storage);
+      await addStrike("bead-danger", "Fix 2", "Failed 2", storage);
+      await addStrike("bead-danger", "Fix 3", "Failed 3", storage);
+
+      const strikedOut = await isStrikedOut("bead-danger", storage);
+      expect(strikedOut).toBe(true);
+    });
+
+    it("returns false for bead with no strikes", async () => {
+      const strikedOut = await isStrikedOut("no-record", storage);
+      expect(strikedOut).toBe(false);
+    });
+  });
+
+  describe("getArchitecturePrompt", () => {
+    it("returns empty string for bead with < 3 strikes", async () => {
+      await addStrike("bead-prompt-1", "Fix 1", "Failed 1", storage);
+
+      const prompt = await getArchitecturePrompt("bead-prompt-1", storage);
+      expect(prompt).toBe("");
+    });
+
+    it("returns empty string for bead with no strikes", async () => {
+      const prompt = await getArchitecturePrompt("no-strikes", storage);
+      expect(prompt).toBe("");
+    });
+
+    it("generates architecture review prompt for struck out bead", async () => {
+      await addStrike(
+        "bead-prompt-2",
+        "Added null checks",
+        "Still crashes on undefined",
+        storage,
+      );
+      await addStrike(
+        "bead-prompt-2",
+        "Used optional chaining",
+        "Runtime error persists",
+        storage,
+      );
+      await addStrike(
+        "bead-prompt-2",
+        "Wrapped in try-catch",
+        "Error still happening",
+        storage,
+      );
+
+      const prompt = await getArchitecturePrompt("bead-prompt-2", storage);
+
+      expect(prompt).toContain("Architecture Review Required");
+      expect(prompt).toContain("bead-prompt-2");
+      expect(prompt).toContain("Added null checks");
+      expect(prompt).toContain("Still crashes on undefined");
+      expect(prompt).toContain("Used optional chaining");
+      expect(prompt).toContain("Runtime error persists");
+      expect(prompt).toContain("Wrapped in try-catch");
+      expect(prompt).toContain("Error still happening");
+      expect(prompt).toContain("architectural problem");
+      expect(prompt).toContain("DO NOT attempt Fix #4");
+      expect(prompt).toContain("Refactor architecture");
+      expect(prompt).toContain("Continue with Fix #4");
+      expect(prompt).toContain("Abandon this approach");
+    });
+
+    it("lists all failures in order", async () => {
+      await addStrike(
+        "bead-prompt-3",
+        "First attempt",
+        "First failure",
+        storage,
+      );
+      await addStrike(
+        "bead-prompt-3",
+        "Second attempt",
+        "Second failure",
+        storage,
+      );
+      await addStrike(
+        "bead-prompt-3",
+        "Third attempt",
+        "Third failure",
+        storage,
+      );
+
+      const prompt = await getArchitecturePrompt("bead-prompt-3", storage);
+
+      const lines = prompt.split("\n");
+      const failureLine1 = lines.find((l) => l.includes("First attempt"));
+      const failureLine2 = lines.find((l) => l.includes("Second attempt"));
+      const failureLine3 = lines.find((l) => l.includes("Third attempt"));
+
+      expect(failureLine1).toBeDefined();
+      expect(failureLine2).toBeDefined();
+      expect(failureLine3).toBeDefined();
+
+      // Check ordering
+      const idx1 = lines.indexOf(failureLine1!);
+      const idx2 = lines.indexOf(failureLine2!);
+      const idx3 = lines.indexOf(failureLine3!);
+
+      expect(idx1).toBeLessThan(idx2);
+      expect(idx2).toBeLessThan(idx3);
+    });
+  });
+
+  describe("clearStrikes", () => {
+    it("clears strikes for a bead", async () => {
+      await addStrike("bead-clear", "Fix 1", "Failed 1", storage);
+      await addStrike("bead-clear", "Fix 2", "Failed 2", storage);
+
+      expect(await getStrikes("bead-clear", storage)).toBe(2);
+
+      await clearStrikes("bead-clear", storage);
+
+      expect(await getStrikes("bead-clear", storage)).toBe(0);
+      expect(await isStrikedOut("bead-clear", storage)).toBe(false);
+    });
+
+    it("handles clearing non-existent bead gracefully", async () => {
+      await expect(clearStrikes("no-bead", storage)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("InMemoryStrikeStorage", () => {
+    it("stores and retrieves strike records", async () => {
+      const storage = new InMemoryStrikeStorage();
+      const record = await addStrike("bead-1", "Fix", "Failed", storage);
+
+      const retrieved = await storage.get("bead-1");
+      expect(retrieved).not.toBeNull();
+      expect(retrieved!.bead_id).toBe("bead-1");
+      expect(retrieved!.strike_count).toBe(1);
+    });
+
+    it("returns null for non-existent bead", async () => {
+      const storage = new InMemoryStrikeStorage();
+      const retrieved = await storage.get("non-existent");
+      expect(retrieved).toBeNull();
+    });
+
+    it("lists all strike records", async () => {
+      const storage = new InMemoryStrikeStorage();
+      await addStrike("bead-1", "Fix", "Failed", storage);
+      await addStrike("bead-2", "Fix", "Failed", storage);
+
+      const all = await storage.getAll();
+      expect(all).toHaveLength(2);
+    });
+
+    it("clears specific bead strikes", async () => {
+      const storage = new InMemoryStrikeStorage();
+      await addStrike("bead-1", "Fix", "Failed", storage);
+      await addStrike("bead-2", "Fix", "Failed", storage);
+
+      await storage.clear("bead-1");
+
+      expect(await storage.get("bead-1")).toBeNull();
+      expect(await storage.get("bead-2")).not.toBeNull();
+    });
+  });
+
+  describe("3-Strike Rule Integration", () => {
+    it("follows complete workflow from no strikes to architecture review", async () => {
+      const beadId = "integration-bead";
+
+      // Start: No strikes
+      expect(await getStrikes(beadId, storage)).toBe(0);
+      expect(await isStrikedOut(beadId, storage)).toBe(false);
+      expect(await getArchitecturePrompt(beadId, storage)).toBe("");
+
+      // Strike 1
+      await addStrike(beadId, "Tried approach A", "Didn't work", storage);
+      expect(await getStrikes(beadId, storage)).toBe(1);
+      expect(await isStrikedOut(beadId, storage)).toBe(false);
+
+      // Strike 2
+      await addStrike(beadId, "Tried approach B", "Also failed", storage);
+      expect(await getStrikes(beadId, storage)).toBe(2);
+      expect(await isStrikedOut(beadId, storage)).toBe(false);
+
+      // Strike 3 - STRUCK OUT
+      await addStrike(beadId, "Tried approach C", "Still broken", storage);
+      expect(await getStrikes(beadId, storage)).toBe(3);
+      expect(await isStrikedOut(beadId, storage)).toBe(true);
+
+      // Architecture prompt should now be available
+      const prompt = await getArchitecturePrompt(beadId, storage);
+      expect(prompt).not.toBe("");
+      expect(prompt).toContain("Architecture Review Required");
+
+      // Clear strikes (e.g., after human intervention)
+      await clearStrikes(beadId, storage);
+      expect(await getStrikes(beadId, storage)).toBe(0);
+      expect(await isStrikedOut(beadId, storage)).toBe(false);
+    });
+  });
+});

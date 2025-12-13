@@ -498,7 +498,7 @@ $ARGUMENTS
 ## Workflow
 
 ### 1. Initialize
-\`agentmail_init(project_path="$PWD", task_description="Swarm: <task>")\`
+\`swarmmail_init(project_path="$PWD", task_description="Swarm: <task>")\`
 
 ### 2. Knowledge Gathering (MANDATORY)
 
@@ -524,7 +524,7 @@ swarm_validate_decomposition(response="<BeadTree JSON>")
 \`beads_create_epic(epic_title="<task>", subtasks=[...])\`
 
 ### 5. Reserve Files
-\`agentmail_reserve(paths=[...], reason="<bead-id>: <desc>")\`
+\`swarmmail_reserve(paths=[...], reason="<bead-id>: <desc>")\`
 
 ### 6. Spawn Agents (ALL in single message)
 \`\`\`
@@ -535,7 +535,7 @@ Task(subagent_type="swarm/worker", prompt="<from above>")
 ### 7. Monitor
 \`\`\`
 swarm_status(epic_id, project_key)
-agentmail_inbox()
+swarmmail_inbox()
 \`\`\`
 
 Intervene if: blocked >5min, file conflicts, scope creep.
@@ -645,14 +645,14 @@ Your prompt includes shared_context from the coordinator's knowledge gathering:
 ## Rules
 
 - Focus ONLY on your assigned files
-- Report blockers immediately via Agent Mail (don't spin)
+- Report blockers immediately via Swarm Mail (don't spin)
 - Use beads_update if blocked
 - Call swarm_complete when done - it handles bead closure and file release
 
 ## Communication
 
 \`\`\`
-agentmail_send(
+swarmmail_send(
   to=["coordinator"],
   subject="Progress/Blocker",
   body="...",

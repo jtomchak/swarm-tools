@@ -525,6 +525,203 @@ export class InMemoryFeedbackStorage implements FeedbackStorage {
 }
 
 // ============================================================================
+// 3-Strike Detection
+// ============================================================================
+
+/**
+ * Strike record for a bead
+ *
+ * Tracks consecutive fix failures to detect architectural problems.
+ * After 3 strikes, the system should STOP and question the architecture
+ * rather than attempting Fix #4.
+ */
+export const StrikeRecordSchema = z.object({
+  /** The bead ID */
+  bead_id: z.string(),
+  /** Number of consecutive failures */
+  strike_count: z.number().int().min(0).max(3),
+  /** Failure descriptions for each strike */
+  failures: z.array(
+    z.object({
+      /** What fix was attempted */
+      attempt: z.string(),
+      /** Why it failed */
+      reason: z.string(),
+      /** When it failed */
+      timestamp: z.string(), // ISO-8601
+    }),
+  ),
+  /** When strikes were recorded */
+  first_strike_at: z.string().optional(), // ISO-8601
+  last_strike_at: z.string().optional(), // ISO-8601
+});
+export type StrikeRecord = z.infer<typeof StrikeRecordSchema>;
+
+/**
+ * Storage interface for strike records
+ */
+export interface StrikeStorage {
+  /** Store a strike record */
+  store(record: StrikeRecord): Promise<void>;
+  /** Get strike record for a bead */
+  get(beadId: string): Promise<StrikeRecord | null>;
+  /** Get all strike records */
+  getAll(): Promise<StrikeRecord[]>;
+  /** Clear strikes for a bead */
+  clear(beadId: string): Promise<void>;
+}
+
+/**
+ * In-memory strike storage
+ */
+export class InMemoryStrikeStorage implements StrikeStorage {
+  private strikes: Map<string, StrikeRecord> = new Map();
+
+  async store(record: StrikeRecord): Promise<void> {
+    this.strikes.set(record.bead_id, record);
+  }
+
+  async get(beadId: string): Promise<StrikeRecord | null> {
+    return this.strikes.get(beadId) ?? null;
+  }
+
+  async getAll(): Promise<StrikeRecord[]> {
+    return Array.from(this.strikes.values());
+  }
+
+  async clear(beadId: string): Promise<void> {
+    this.strikes.delete(beadId);
+  }
+}
+
+/**
+ * Add a strike to a bead's record
+ *
+ * Records a failure attempt and increments the strike count.
+ *
+ * @param beadId - Bead ID
+ * @param attempt - Description of what was attempted
+ * @param reason - Why it failed
+ * @param storage - Strike storage (defaults to in-memory)
+ * @returns Updated strike record
+ */
+export async function addStrike(
+  beadId: string,
+  attempt: string,
+  reason: string,
+  storage: StrikeStorage = new InMemoryStrikeStorage(),
+): Promise<StrikeRecord> {
+  const existing = await storage.get(beadId);
+  const now = new Date().toISOString();
+
+  const record: StrikeRecord = existing ?? {
+    bead_id: beadId,
+    strike_count: 0,
+    failures: [],
+  };
+
+  record.strike_count = Math.min(3, record.strike_count + 1);
+  record.failures.push({ attempt, reason, timestamp: now });
+  record.last_strike_at = now;
+
+  if (!record.first_strike_at) {
+    record.first_strike_at = now;
+  }
+
+  await storage.store(record);
+  return record;
+}
+
+/**
+ * Get strike count for a bead
+ *
+ * @param beadId - Bead ID
+ * @param storage - Strike storage
+ * @returns Strike count (0-3)
+ */
+export async function getStrikes(
+  beadId: string,
+  storage: StrikeStorage = new InMemoryStrikeStorage(),
+): Promise<number> {
+  const record = await storage.get(beadId);
+  return record?.strike_count ?? 0;
+}
+
+/**
+ * Check if a bead has struck out (3 strikes)
+ *
+ * @param beadId - Bead ID
+ * @param storage - Strike storage
+ * @returns True if bead has 3 strikes
+ */
+export async function isStrikedOut(
+  beadId: string,
+  storage: StrikeStorage = new InMemoryStrikeStorage(),
+): Promise<boolean> {
+  const count = await getStrikes(beadId, storage);
+  return count >= 3;
+}
+
+/**
+ * Generate architecture review prompt for a struck-out bead
+ *
+ * When a bead hits 3 strikes, this generates a prompt that forces
+ * the human to question the architecture instead of attempting Fix #4.
+ *
+ * @param beadId - Bead ID
+ * @param storage - Strike storage
+ * @returns Architecture review prompt
+ */
+export async function getArchitecturePrompt(
+  beadId: string,
+  storage: StrikeStorage = new InMemoryStrikeStorage(),
+): Promise<string> {
+  const record = await storage.get(beadId);
+
+  if (!record || record.strike_count < 3) {
+    return "";
+  }
+
+  const failuresList = record.failures
+    .map((f, i) => `${i + 1}. **${f.attempt}** - Failed: ${f.reason}`)
+    .join("\n");
+
+  return `## Architecture Review Required
+
+This bead (\`${beadId}\`) has failed 3 consecutive fix attempts:
+
+${failuresList}
+
+This pattern suggests an **architectural problem**, not a bug.
+
+**Questions to consider:**
+- Is the current approach fundamentally sound?
+- Should we refactor the architecture instead?
+- Are we fixing symptoms instead of root cause?
+
+**Options:**
+1. **Refactor architecture** (describe new approach)
+2. **Continue with Fix #4** (explain why this time is different)
+3. **Abandon this approach entirely**
+
+**DO NOT attempt Fix #4 without answering these questions.**
+`;
+}
+
+/**
+ * Clear strikes for a bead (e.g., after successful fix)
+ *
+ * @param beadId - Bead ID
+ * @param storage - Strike storage
+ */
+export async function clearStrikes(
+  beadId: string,
+  storage: StrikeStorage = new InMemoryStrikeStorage(),
+): Promise<void> {
+  await storage.clear(beadId);
+}
+
+// ============================================================================
 // Error Accumulator
 // ============================================================================
 
@@ -772,4 +969,5 @@ export const learningSchemas = {
   DecompositionStrategySchema,
   ErrorTypeSchema,
   ErrorEntrySchema,
+  StrikeRecordSchema,
 };

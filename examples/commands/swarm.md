@@ -83,20 +83,66 @@ git checkout -b swarm/<short-task-name>
 git push -u origin HEAD
 ```
 
-### 4. Decompose Task
+### 4. Decompose Task (DELEGATE TO SUBAGENT)
 
-Use strategy selection and planning:
+> **⚠️ CRITICAL: Context Preservation**
+>
+> **DO NOT decompose inline in the coordinator thread.** This consumes massive context with file reading, CASS queries, and reasoning. You will hit context limits on long swarms.
+>
+> **ALWAYS delegate to a `swarm/planner` subagent** that returns only the validated BeadTree JSON.
+
+**❌ Don't do this (inline planning):**
 
 ```bash
+# This pollutes your main thread context
 swarm_select_strategy(task="<the task>")
-swarm_plan_prompt(task="<the task>", strategy="<auto or selected>", context="<synthesized knowledge>")
+swarm_plan_prompt(task="<the task>", ...)
+# ... you reason about decomposition inline ...
+# ... context fills with file contents, analysis ...
+swarm_validate_decomposition(response="...")
 ```
 
-Follow the prompt to create a BeadTree, then validate:
+**✅ Do this (delegate to subagent):**
 
 ```bash
-swarm_validate_decomposition(response="<your BeadTree JSON>")
+# 1. Create planning bead
+beads_create(title="Plan: <task>", type="task", description="Decompose into subtasks")
+
+# 2. Delegate to swarm/planner subagent
+Task(
+  subagent_type="swarm/planner",
+  description="Decompose task: <task>",
+  prompt="
+You are a swarm planner. Generate a BeadTree for this task.
+
+## Task
+<task description>
+
+## Synthesized Context
+<from knowledge gathering step 2>
+
+## Instructions
+1. Use swarm_select_strategy(task=\"...\")
+2. Use swarm_plan_prompt(task=\"...\", max_subtasks=5, query_cass=true)
+3. Reason about decomposition strategy
+4. Generate BeadTree JSON
+5. Validate with swarm_validate_decomposition
+6. Return ONLY the validated BeadTree JSON (no analysis)
+
+Output: Valid BeadTree JSON only.
+  "
+)
+
+# 3. Subagent returns validated JSON, parse it
+# beadTree = <result from subagent>
 ```
+
+**Why?**
+
+- Main thread stays clean (only receives final JSON)
+- Subagent context is disposable (garbage collected after planning)
+- Scales to 10+ worker swarms without exhaustion
+- Faster coordination responses
 
 ### 5. Create Beads
 
@@ -226,16 +272,32 @@ gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Be
 | Architecture decisions | `skills_use(name="system-design")`                      |
 | Breaking dependencies  | `skills_use(name="testing-patterns")`                   |
 
+## Context Preservation Rules
+
+**These are NON-NEGOTIABLE. Violating them burns context and kills long swarms.**
+
+| Rule                               | Why                                                       |
+| ---------------------------------- | --------------------------------------------------------- |
+| **Delegate planning to subagent**  | Decomposition reasoning + file reads consume huge context |
+| **Never read 10+ files inline**    | Use subagent to read + summarize                          |
+| **Limit CASS queries**             | One query per domain, delegate deep searching             |
+| **Use swarmmail_inbox carefully**  | Max 5 messages, no bodies by default                      |
+| **Receive JSON only from planner** | No analysis, no file contents, just structure             |
+
+**Pattern: Delegate → Receive Summary → Act**
+
+Not: Do Everything Inline → Run Out of Context → Fail
+
 ## Quick Checklist
 
 - [ ] **swarmmail_init** called FIRST
 - [ ] Knowledge gathered (semantic-memory, CASS, pdf-brain, skills)
-- [ ] Strategy selected
+- [ ] **Planning delegated to swarm/planner subagent** (NOT inline)
 - [ ] BeadTree validated (no file conflicts)
 - [ ] Epic + subtasks created
 - [ ] Files reserved via **swarmmail_reserve**
 - [ ] Workers spawned in parallel
-- [ ] Progress monitored via **swarmmail_inbox**
+- [ ] Progress monitored via **swarmmail_inbox** (limit=5, no bodies)
 - [ ] PR created (or pushed to main)
 
 Begin with swarmmail_init and knowledge gathering now.
