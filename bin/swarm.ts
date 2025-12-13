@@ -1072,6 +1072,79 @@ async function setup() {
     }
   }
 
+  // Offer to update AGENTS.md with skill awareness
+  const agentsPath = join(configDir, "AGENTS.md");
+  if (existsSync(agentsPath)) {
+    const updateAgents = await p.confirm({
+      message: "Update AGENTS.md with skill awareness?",
+      initialValue: true,
+    });
+
+    if (!p.isCancel(updateAgents) && updateAgents) {
+      const s = p.spinner();
+      s.start("Updating AGENTS.md...");
+
+      const agentsPrompt = `You are updating the user's AGENTS.md file to add skill awareness.
+
+## Task
+Read ${agentsPath} and add a Skills section if one doesn't exist. If a skills section exists, update it.
+
+## What to Add
+
+1. **Tool Preferences** - If there's a tool_preferences or similar section, add skills tools:
+   - skills_list - discover available skills
+   - skills_use - load skill for context injection  
+   - skills_read - read full skill content
+
+2. **Skills Section** - Add this (adapt style to match the file):
+
+### Skills (Knowledge Injection)
+
+Skills are reusable knowledge packages. Load them on-demand for specialized tasks.
+
+**When to Use:**
+- Before unfamiliar work - check if a skill exists
+- When you need domain-specific patterns
+- For complex workflows that benefit from guidance
+
+**Usage:**
+\`\`\`
+skills_list()                              # See available skills
+skills_use(name="debugging")               # Load a skill
+skills_use(name="code-review", context="reviewing auth") # With context
+\`\`\`
+
+**Bundled Skills:** agent-patterns, cli-builder, code-review, debugging, learning-systems, mcp-tool-authoring, resilience-patterns, skill-creator, swarm-coordination, tacit-knowledge-extraction, testing-strategies, zod-validation
+
+## Rules
+- Preserve existing content and style
+- Don't duplicate - update if skills section exists
+- Keep tone consistent
+- Place near tool preferences or as logical new section
+
+Edit the file now.`;
+
+      try {
+        const result = Bun.spawnSync(["opencode", "run", agentsPrompt], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120000,
+        });
+
+        if (result.exitCode === 0) {
+          s.stop("AGENTS.md updated");
+          p.log.success("Added skill awareness to AGENTS.md");
+        } else {
+          s.stop("Could not update AGENTS.md");
+          p.log.warn("You can manually add skills section later");
+        }
+      } catch {
+        s.stop("Could not update AGENTS.md");
+        p.log.warn("You can manually add skills section later");
+      }
+    }
+  }
+
   p.note(
     'cd your-project\nbd init\nopencode\n/swarm "your task"\n\nSkills: Use skills_list to see available skills',
     "Next steps",
@@ -1351,6 +1424,7 @@ ${cyan("Commands:")}
   swarm doctor    Health check - shows status of all dependencies
   swarm init      Initialize beads in current project
   swarm config    Show paths to generated config files
+  swarm agents    Update AGENTS.md with skill awareness
   swarm update    Update to latest version
   swarm version   Show version and banner
   swarm tool      Execute a tool (for plugin wrapper)
@@ -1526,6 +1600,131 @@ async function listTools() {
 }
 
 // ============================================================================
+// Agents Command - Update AGENTS.md with skill awareness
+// ============================================================================
+
+async function agents() {
+  const home = process.env.HOME || process.env.USERPROFILE || "~";
+  const agentsPath = join(home, ".config", "opencode", "AGENTS.md");
+
+  p.intro(yellow(BANNER));
+
+  // Check if AGENTS.md exists
+  if (!existsSync(agentsPath)) {
+    p.log.warn("No AGENTS.md found at " + agentsPath);
+    p.log.message(
+      dim("Create one first, then run this command to add skill awareness"),
+    );
+    p.outro("Aborted");
+    return;
+  }
+
+  // Check if opencode is available
+  const opencode = await checkCommand("opencode", ["--version"]);
+  if (!opencode.available) {
+    p.log.error("OpenCode not found");
+    p.log.message(dim("Install: npm install -g opencode"));
+    p.outro("Aborted");
+    return;
+  }
+
+  const confirm = await p.confirm({
+    message: "Update AGENTS.md with skill awareness?",
+    initialValue: true,
+  });
+
+  if (p.isCancel(confirm) || !confirm) {
+    p.outro("Aborted");
+    return;
+  }
+
+  const s = p.spinner();
+  s.start("Updating AGENTS.md with skill awareness...");
+
+  const prompt = `You are updating the user's AGENTS.md file to add skill awareness.
+
+## Task
+Read ~/.config/opencode/AGENTS.md and add a Skills section if one doesn't exist.
+
+## What to Add
+Add a section about using skills. Include:
+
+1. **Tool Preferences Update** - Add skills_* tools to the tool priority list:
+   - skills_list - discover available skills
+   - skills_use - load skill for context injection
+   - skills_read - read full skill content
+
+2. **Skills Section** - Add this section (adapt to match the file's style):
+
+### Skills (Knowledge Injection)
+
+Skills are reusable knowledge packages. Load them on-demand for specialized tasks.
+
+**When to Use Skills:**
+- Before starting unfamiliar work - check if a skill exists
+- When you need domain-specific patterns
+- For complex workflows that benefit from guidance
+
+**Available Skills** (run \`skills_list()\` to see current list):
+- agent-patterns: AI agent design patterns
+- cli-builder: TypeScript CLI patterns
+- code-review: Review checklists
+- debugging: Root cause analysis
+- learning-systems: Feedback scoring, pattern maturity
+- mcp-tool-authoring: Building MCP tools
+- resilience-patterns: Error recovery, retries
+- skill-creator: Creating new skills
+- swarm-coordination: Multi-agent workflows
+- tacit-knowledge-extraction: Pattern mining
+- testing-strategies: Vitest patterns
+- zod-validation: Schema validation
+
+**Usage Pattern:**
+\`\`\`
+# Check what's available
+skills_list()
+
+# Load a skill before starting work
+skills_use(name="debugging")
+
+# Load with context
+skills_use(name="code-review", context="reviewing auth changes")
+\`\`\`
+
+## Rules
+- Preserve the existing content and style
+- Add the skills section in a logical place (near tool preferences or as a new section)
+- Don't duplicate if a skills section already exists - update it instead
+- Keep the tone consistent with the rest of the file
+
+Edit the file now.`;
+
+  try {
+    const result = Bun.spawnSync(["opencode", "run", prompt], {
+      stdio: ["inherit", "pipe", "pipe"],
+      timeout: 120000, // 2 minute timeout
+    });
+
+    if (result.exitCode === 0) {
+      s.stop("AGENTS.md updated with skill awareness");
+      p.log.success("Skills section added to " + agentsPath);
+      p.log.message(
+        dim("Skills available: skills_list, skills_use, skills_read"),
+      );
+    } else {
+      const stderr = result.stderr?.toString() || "";
+      s.stop("Failed to update AGENTS.md");
+      p.log.error(stderr || "Unknown error");
+    }
+  } catch (error) {
+    s.stop("Failed to update AGENTS.md");
+    p.log.error(String(error));
+  }
+
+  p.outro("Done");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1560,6 +1759,9 @@ switch (command) {
     }
     break;
   }
+  case "agents":
+    await agents();
+    break;
   case "version":
   case "--version":
   case "-v":
