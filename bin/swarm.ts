@@ -623,6 +623,66 @@ async function doctor() {
   const requiredMissing = required.filter((r) => !r.available);
   const optionalMissing = optional.filter((r) => !r.available);
 
+  // Check skills
+  p.log.step("Skills:");
+  const configDir = join(homedir(), ".config", "opencode");
+  const globalSkillsPath = join(configDir, "skills");
+  const bundledSkillsPath = join(__dirname, "..", "global-skills");
+
+  // Global skills directory
+  if (existsSync(globalSkillsPath)) {
+    try {
+      const { readdirSync } = require("fs");
+      const skills = readdirSync(globalSkillsPath, { withFileTypes: true })
+        .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+        .map((d: { name: string }) => d.name);
+      if (skills.length > 0) {
+        p.log.success(`Global skills (${skills.length}): ${skills.join(", ")}`);
+      } else {
+        p.log.warn("Global skills directory exists but is empty");
+      }
+    } catch {
+      p.log.warn("Global skills directory: " + globalSkillsPath);
+    }
+  } else {
+    p.log.warn("No global skills directory (run 'swarm setup' to create)");
+  }
+
+  // Bundled skills
+  if (existsSync(bundledSkillsPath)) {
+    try {
+      const { readdirSync } = require("fs");
+      const bundled = readdirSync(bundledSkillsPath, { withFileTypes: true })
+        .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+        .map((d: { name: string }) => d.name);
+      p.log.success(
+        `Bundled skills (${bundled.length}): ${bundled.join(", ")}`,
+      );
+    } catch {
+      p.log.warn("Could not read bundled skills");
+    }
+  }
+
+  // Project skills (check current directory)
+  const projectSkillsDirs = [".opencode/skills", ".claude/skills", "skills"];
+  for (const dir of projectSkillsDirs) {
+    if (existsSync(dir)) {
+      try {
+        const { readdirSync } = require("fs");
+        const skills = readdirSync(dir, { withFileTypes: true })
+          .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+          .map((d: { name: string }) => d.name);
+        if (skills.length > 0) {
+          p.log.success(
+            `Project skills in ${dir}/ (${skills.length}): ${skills.join(", ")}`,
+          );
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
   if (requiredMissing.length > 0) {
     p.outro(
       "Missing " +
@@ -977,7 +1037,8 @@ async function setup() {
   p.log.step("Setting up OpenCode integration...");
 
   // Create directories if needed
-  for (const dir of [pluginDir, commandDir, agentDir]) {
+  const skillsDir = join(configDir, "skills");
+  for (const dir of [pluginDir, commandDir, agentDir, skillsDir]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
@@ -995,8 +1056,24 @@ async function setup() {
   writeFileSync(workerAgentPath, getWorkerAgent(workerModel as string));
   p.log.success("Worker agent: " + workerAgentPath);
 
+  p.log.success("Skills directory: " + skillsDir);
+
+  // Show bundled skills info
+  const bundledSkillsPath = join(__dirname, "..", "global-skills");
+  if (existsSync(bundledSkillsPath)) {
+    try {
+      const { readdirSync } = require("fs");
+      const bundled = readdirSync(bundledSkillsPath, { withFileTypes: true })
+        .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+        .map((d: { name: string }) => d.name);
+      p.log.message(dim("  Bundled skills: " + bundled.join(", ")));
+    } catch {
+      // Ignore
+    }
+  }
+
   p.note(
-    'cd your-project\nbd init\nopencode\n/swarm "your task"',
+    'cd your-project\nbd init\nopencode\n/swarm "your task"\n\nSkills: Use skills_list to see available skills',
     "Next steps",
   );
 
@@ -1075,6 +1152,25 @@ async function init() {
             beadSpinner.stop("Failed to create bead");
           }
         }
+      }
+    }
+
+    // Offer to create project skills directory
+    const createSkillsDir = await p.confirm({
+      message: "Create project skills directory (.opencode/skills/)?",
+      initialValue: false,
+    });
+
+    if (!p.isCancel(createSkillsDir) && createSkillsDir) {
+      const skillsPath = ".opencode/skills";
+      if (!existsSync(skillsPath)) {
+        mkdirSync(skillsPath, { recursive: true });
+        p.log.success("Created " + skillsPath + "/");
+        p.log.message(
+          dim("  Add SKILL.md files here for project-specific skills"),
+        );
+      } else {
+        p.log.warn(skillsPath + "/ already exists");
       }
     }
 
