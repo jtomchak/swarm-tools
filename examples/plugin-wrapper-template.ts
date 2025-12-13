@@ -667,6 +667,115 @@ const swarm_evaluation_prompt = tool({
 });
 
 // =============================================================================
+// Skills Tools
+// =============================================================================
+
+const skills_list = tool({
+  description:
+    "List all available skills from global, project, and bundled sources",
+  args: {
+    source: tool.schema
+      .enum(["all", "global", "project", "bundled"])
+      .optional()
+      .describe("Filter by source (default: all)"),
+  },
+  execute: (args, ctx) => execTool("skills_list", args, ctx),
+});
+
+const skills_read = tool({
+  description: "Read a skill's full content including SKILL.md and references",
+  args: {
+    name: tool.schema.string().describe("Skill name"),
+  },
+  execute: (args, ctx) => execTool("skills_read", args, ctx),
+});
+
+const skills_use = tool({
+  description:
+    "Get skill content formatted for injection into agent context. Use this when you need to apply a skill's knowledge to the current task.",
+  args: {
+    name: tool.schema.string().describe("Skill name"),
+    context: tool.schema
+      .string()
+      .optional()
+      .describe("Optional context about how the skill will be used"),
+  },
+  execute: (args, ctx) => execTool("skills_use", args, ctx),
+});
+
+const skills_create = tool({
+  description: "Create a new skill with SKILL.md template",
+  args: {
+    name: tool.schema.string().describe("Skill name (kebab-case)"),
+    description: tool.schema.string().describe("Brief skill description"),
+    scope: tool.schema
+      .enum(["global", "project"])
+      .optional()
+      .describe("Where to create (default: project)"),
+    tags: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Skill tags for discovery"),
+  },
+  execute: (args, ctx) => execTool("skills_create", args, ctx),
+});
+
+const skills_update = tool({
+  description: "Update an existing skill's SKILL.md content",
+  args: {
+    name: tool.schema.string().describe("Skill name"),
+    content: tool.schema.string().describe("New SKILL.md content"),
+  },
+  execute: (args, ctx) => execTool("skills_update", args, ctx),
+});
+
+const skills_delete = tool({
+  description: "Delete a skill (project skills only)",
+  args: {
+    name: tool.schema.string().describe("Skill name"),
+  },
+  execute: (args, ctx) => execTool("skills_delete", args, ctx),
+});
+
+const skills_init = tool({
+  description: "Initialize skills directory in current project",
+  args: {
+    path: tool.schema
+      .string()
+      .optional()
+      .describe("Custom path (default: .opencode/skills)"),
+  },
+  execute: (args, ctx) => execTool("skills_init", args, ctx),
+});
+
+const skills_add_script = tool({
+  description: "Add an executable script to a skill",
+  args: {
+    skill_name: tool.schema.string().describe("Skill name"),
+    script_name: tool.schema.string().describe("Script filename"),
+    content: tool.schema.string().describe("Script content"),
+    executable: tool.schema
+      .boolean()
+      .optional()
+      .describe("Make executable (default: true)"),
+  },
+  execute: (args, ctx) => execTool("skills_add_script", args, ctx),
+});
+
+const skills_execute = tool({
+  description: "Execute a skill's script",
+  args: {
+    skill_name: tool.schema.string().describe("Skill name"),
+    script_name: tool.schema.string().describe("Script to execute"),
+    args: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Script arguments"),
+  },
+  execute: (args, ctx) => execTool("skills_execute", args, ctx),
+});
+
+// =============================================================================
 // Plugin Export
 // =============================================================================
 
@@ -716,6 +825,16 @@ export const SwarmPlugin: Plugin = async (
       swarm_spawn_subtask,
       swarm_complete_subtask,
       swarm_evaluation_prompt,
+      // Skills
+      skills_list,
+      skills_read,
+      skills_use,
+      skills_create,
+      skills_update,
+      skills_delete,
+      skills_init,
+      skills_add_script,
+      skills_execute,
     },
   };
 };
