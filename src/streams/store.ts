@@ -139,11 +139,25 @@ export async function appendEvents(
       }
       await db.exec("COMMIT");
     } catch (e) {
-      // FIX: Log rollback failures (connection lost, etc)
+      // FIX: Propagate rollback failures to prevent silent data corruption
+      let rollbackError: unknown = null;
       try {
         await db.exec("ROLLBACK");
-      } catch (rollbackError) {
-        console.error("[SwarmMail] ROLLBACK failed:", rollbackError);
+      } catch (rbErr) {
+        rollbackError = rbErr;
+        console.error("[SwarmMail] ROLLBACK failed:", rbErr);
+      }
+
+      if (rollbackError) {
+        // Throw composite error so caller knows both failures
+        const compositeError = new Error(
+          `Transaction failed: ${e instanceof Error ? e.message : String(e)}. ` +
+            `ROLLBACK also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}. ` +
+            `Database may be in inconsistent state.`,
+        );
+        (compositeError as any).originalError = e;
+        (compositeError as any).rollbackError = rollbackError;
+        throw compositeError;
       }
       throw e;
     }
@@ -637,6 +651,19 @@ async function handleFileReserved(
       event.timestamp, // $N+5
       event.expires_at, // $N+6
     ];
+
+    // FIX: Make idempotent by deleting existing active reservations first
+    // This handles retry scenarios (network timeouts, etc.) without creating duplicates
+    if (event.paths.length > 0) {
+      await db.query(
+        `DELETE FROM reservations 
+         WHERE project_key = $1 
+           AND agent_name = $2 
+           AND path_pattern = ANY($3)
+           AND released_at IS NULL`,
+        [event.project_key, event.agent_name, event.paths],
+      );
+    }
 
     await db.query(
       `INSERT INTO reservations (project_key, agent_name, path_pattern, exclusive, reason, created_at, expires_at)
