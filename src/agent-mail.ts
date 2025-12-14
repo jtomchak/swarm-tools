@@ -31,6 +31,7 @@ import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { isToolAvailable, warnMissingTool } from "./tool-availability";
 import { getRateLimiter, type RateLimiter } from "./rate-limiter";
+import type { MailSessionState } from "./streams/events";
 
 // ============================================================================
 // Configuration
@@ -92,13 +93,12 @@ const RECOVERY_CONFIG = {
 // Types
 // ============================================================================
 
-/** Agent Mail session state */
-export interface AgentMailState {
-  projectKey: string;
-  agentName: string;
-  reservations: number[];
-  startedAt: string;
-}
+/**
+ * Agent Mail session state
+ * @deprecated Use MailSessionState from streams/events.ts instead
+ * This is kept for backward compatibility and re-exported as an alias
+ */
+export type AgentMailState = MailSessionState;
 
 // ============================================================================
 // Module-level state (keyed by sessionID)

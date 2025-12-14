@@ -28,6 +28,7 @@ import {
   checkSwarmHealth,
 } from "./streams/swarm-mail";
 import { getActiveReservations } from "./streams/projections";
+import type { MailSessionState } from "./streams/events";
 import {
   existsSync,
   mkdirSync,
@@ -47,13 +48,12 @@ interface ToolContext {
   sessionID: string;
 }
 
-/** Swarm Mail session state */
-export interface SwarmMailState {
-  projectKey: string;
-  agentName: string;
-  reservations: number[];
-  startedAt: string;
-}
+/**
+ * Swarm Mail session state
+ * @deprecated Use MailSessionState from streams/events.ts instead
+ * This is kept for backward compatibility and re-exported as an alias
+ */
+export type SwarmMailState = MailSessionState;
 
 /** Init tool arguments */
 interface InitArgs {

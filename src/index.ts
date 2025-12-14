@@ -302,6 +302,14 @@ export {
 } from "./swarm-mail";
 
 /**
+ * Re-export shared types from streams/events
+ *
+ * Includes:
+ * - MailSessionState - Shared session state type for Agent Mail and Swarm Mail
+ */
+export { type MailSessionState } from "./streams/events";
+
+/**
  * Re-export structured module
  *
  * Includes:

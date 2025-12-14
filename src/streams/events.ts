@@ -175,6 +175,28 @@ export type TaskCompletedEvent = z.infer<typeof TaskCompletedEventSchema>;
 export type TaskBlockedEvent = z.infer<typeof TaskBlockedEventSchema>;
 
 // ============================================================================
+// Session State Types
+// ============================================================================
+
+/**
+ * Shared session state for Agent Mail and Swarm Mail
+ *
+ * Common fields for tracking agent coordination session across both
+ * the MCP-based implementation (agent-mail) and the embedded event-sourced
+ * implementation (swarm-mail).
+ */
+export interface MailSessionState {
+  /** Project key (usually absolute path) */
+  projectKey: string;
+  /** Agent name for this session */
+  agentName: string;
+  /** Active reservation IDs */
+  reservations: number[];
+  /** Session start timestamp (ISO-8601) */
+  startedAt: string;
+}
+
+// ============================================================================
 // Event Helpers
 // ============================================================================
 
