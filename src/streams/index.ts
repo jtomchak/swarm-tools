@@ -1,5 +1,30 @@
 /**
- * PGLite Event Store Setup
+ * SwarmMail Event Store - PGLite-based event sourcing
+ *
+ * ## Thread Safety
+ *
+ * PGLite runs in-process as a single-threaded SQLite-compatible database.
+ * While Node.js is single-threaded, async operations can interleave.
+ *
+ * **Concurrency Model:**
+ * - Single PGLite instance per project (singleton pattern via LRU cache)
+ * - Transactions provide isolation for multi-statement operations
+ * - appendEvents uses BEGIN/COMMIT for atomic event batches
+ * - Concurrent reads are safe (no locks needed)
+ * - Concurrent writes are serialized by PGLite internally
+ *
+ * **Race Condition Mitigations:**
+ * - File reservations use INSERT with conflict detection
+ * - Sequence numbers are auto-incremented by database
+ * - Materialized views updated within same transaction as events
+ * - Pending instance promises prevent duplicate initialization
+ *
+ * **Known Limitations:**
+ * - No distributed locking (single-process only)
+ * - Large transactions may block other operations
+ * - No connection pooling (embedded database)
+ *
+ * ## Database Setup
  *
  * Embedded PostgreSQL database for event sourcing.
  * No external server required - runs in-process.
@@ -39,6 +64,38 @@ export async function withTimeout<T>(
     ),
   );
   return Promise.race([promise, timeout]);
+}
+
+// ============================================================================
+// Performance Monitoring
+// ============================================================================
+
+/** Threshold for slow query warnings in milliseconds */
+const SLOW_QUERY_THRESHOLD_MS = 100;
+
+/**
+ * Execute a database operation with timing instrumentation.
+ * Logs a warning if the operation exceeds SLOW_QUERY_THRESHOLD_MS.
+ *
+ * @param operation - Name of the operation for logging
+ * @param fn - Async function to execute
+ * @returns Result of the function
+ */
+export async function withTiming<T>(
+  operation: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const start = performance.now();
+  try {
+    return await fn();
+  } finally {
+    const duration = performance.now() - start;
+    if (duration > SLOW_QUERY_THRESHOLD_MS) {
+      console.warn(
+        `[SwarmMail] Slow operation: ${operation} took ${duration.toFixed(1)}ms`,
+      );
+    }
+  }
 }
 
 // ============================================================================

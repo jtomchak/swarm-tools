@@ -55,6 +55,48 @@ cd your-project
 swarm init
 ```
 
+## Migrating from MCP Agent Mail
+
+If you were using the MCP-based Agent Mail (pre-v0.15), here's how to migrate:
+
+### What Changed
+
+- **Before:** Agent Mail required a separate MCP server running Go-based agent-mail
+- **After:** Agent Mail is now embedded using PGLite (no external dependencies)
+
+### Migration Steps
+
+1. **Update the plugin:**
+
+   ```bash
+   npm install -g opencode-swarm-plugin@latest
+   ```
+
+2. **Remove MCP configuration** (if present):
+   - Delete any `agent-mail` MCP server configuration from your OpenCode config
+   - The embedded version starts automatically
+
+3. **Data Migration:**
+   - Previous MCP data is NOT automatically migrated
+   - For most users, starting fresh is recommended (swarm state is ephemeral)
+   - If you need historical data, export from MCP before upgrading
+
+### Breaking Changes
+
+- `agentmail_*` tools now use embedded PGLite instead of MCP
+- No external server required
+- Slightly different error messages (more actionable)
+
+### Rollback
+
+If you need to rollback:
+
+```bash
+npm install -g opencode-swarm-plugin@0.14.x
+```
+
+And restore your MCP configuration.
+
 ## CLI
 
 ```
@@ -338,9 +380,11 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_sess
 | `swarmmail_ack`          | Acknowledge message                           |
 | `swarmmail_health`       | Check embedded database health                |
 
-### Agent Mail (Deprecated - Use Swarm Mail)
+### Agent Mail (Deprecated - MCP-based)
 
-> **Note:** Agent Mail tools (`agentmail_*`) have been removed in v0.14.0. Use `swarmmail_*` tools instead. The embedded Swarm Mail provides the same functionality without requiring an external MCP server.
+> **Note:** The MCP-based `agentmail_*` tools in `src/agent-mail.ts` are **deprecated** as of v0.14.0. They remain for backward compatibility but will be removed in v1.0.0.
+>
+> **Use `swarmmail_*` tools instead** - embedded PGLite implementation with no external server required. See [Migrating from MCP Agent Mail](#migrating-from-mcp-agent-mail) for migration guide.
 
 ## Event-Sourced Architecture (Embedded)
 
@@ -376,13 +420,13 @@ The plugin includes an embedded event-sourced Swarm Mail implementation as an al
 
 ### Architecture Comparison
 
-**MCP-based (external):**
+**MCP-based (deprecated, external):**
 
 ```
 plugin tools → HTTP → MCP Server (Go process) → SQLite
 ```
 
-**Event-sourced (embedded):**
+**Event-sourced (embedded, current):**
 
 ```
 plugin tools → streams/agent-mail.ts → streams/store.ts → PGLite (in-process)

@@ -15,6 +15,12 @@
 
 import { checkSwarmHealth } from "./streams/swarm-mail";
 
+/** Default timeout for URL reachability checks in milliseconds */
+const DEFAULT_URL_TIMEOUT_MS = 2000;
+
+/** Timeout for bunx commands (semantic-memory check) in milliseconds */
+const BUNX_TIMEOUT_MS = 10000;
+
 export type ToolName =
   | "semantic-memory"
   | "cass"
@@ -55,11 +61,13 @@ async function commandExists(cmd: string): Promise<boolean> {
 }
 
 /**
- * Check if a URL is reachable
+ * Check if a URL is reachable.
+ * Uses GET instead of HEAD because some servers don't support HEAD.
+ * We only check response.ok status, not body content, so GET has minimal overhead vs HEAD.
  */
 async function urlReachable(
   url: string,
-  timeoutMs: number = 2000,
+  timeoutMs: number = DEFAULT_URL_TIMEOUT_MS,
 ): Promise<boolean> {
   try {
     const controller = new AbortController();
@@ -109,7 +117,7 @@ const toolCheckers: Record<ToolName, () => Promise<ToolStatus>> = {
         stderr: "pipe",
       });
 
-      const timeout = setTimeout(() => proc.kill(), 10000);
+      const timeout = setTimeout(() => proc.kill(), BUNX_TIMEOUT_MS);
       const exitCode = await proc.exited;
       clearTimeout(timeout);
 
@@ -242,7 +250,8 @@ const toolCheckers: Record<ToolName, () => Promise<ToolStatus>> = {
 };
 
 /**
- * Fallback behavior descriptions for each tool
+ * Human-readable descriptions of graceful degradation behavior when tools are unavailable.
+ * Shown to users in warnings and tool status output.
  */
 const fallbackBehaviors: Record<ToolName, string> = {
   "semantic-memory":
@@ -330,7 +339,9 @@ export async function checkAllTools(): Promise<
 }
 
 /**
- * Log a warning about a missing tool (once per tool per session)
+ * Log a warning when a tool is missing.
+ * Uses Set to deduplicate - logs once per tool per session to prevent spam
+ * when tool availability is checked repeatedly.
  */
 export function warnMissingTool(tool: ToolName): void {
   if (warningsLogged.has(tool)) {
@@ -397,7 +408,19 @@ export async function ifToolAvailable<T>(
 }
 
 /**
- * Reset tool cache (for testing)
+ * Reset the tool availability cache.
+ * Use in tests to ensure fresh checks, or when tool availability may have
+ * changed mid-session (e.g., after installing a tool via `bunx`).
+ *
+ * @example
+ * // In tests
+ * beforeEach(() => resetToolCache());
+ *
+ * @example
+ * // After installing a tool
+ * await installTool('semantic-memory');
+ * resetToolCache();
+ * const available = await isToolAvailable('semantic-memory');
  */
 export function resetToolCache(): void {
   toolCache.clear();

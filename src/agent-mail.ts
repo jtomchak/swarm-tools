@@ -1,6 +1,19 @@
 /**
  * Agent Mail Module - MCP client for multi-agent coordination
  *
+ * ⚠️ DEPRECATED: This MCP-based implementation is deprecated as of v0.14.0.
+ *
+ * Use the embedded Swarm Mail implementation instead:
+ * - swarmmail_* tools in src/streams/swarm-mail.ts
+ * - No external MCP server required
+ * - Embedded PGLite with event sourcing
+ * - Better error messages and recovery
+ *
+ * This file remains for backward compatibility and will be removed in v1.0.0.
+ * See README.md "Migrating from MCP Agent Mail" section for migration guide.
+ *
+ * ---
+ *
  * This module provides type-safe wrappers around the Agent Mail MCP server.
  * It enforces context-preservation defaults to prevent session exhaustion.
  *

@@ -9,7 +9,7 @@
  *
  * All state changes go through events. Projections compute current state.
  */
-import { getDatabase } from "./index";
+import { getDatabase, withTiming } from "./index";
 import {
   type AgentEvent,
   createEvent,
@@ -111,43 +111,45 @@ export async function appendEvents(
   events: AgentEvent[],
   projectPath?: string,
 ): Promise<Array<AgentEvent & { id: number; sequence: number }>> {
-  const db = await getDatabase(projectPath);
-  const results: Array<AgentEvent & { id: number; sequence: number }> = [];
+  return withTiming("appendEvents", async () => {
+    const db = await getDatabase(projectPath);
+    const results: Array<AgentEvent & { id: number; sequence: number }> = [];
 
-  await db.exec("BEGIN");
-  try {
-    for (const event of events) {
-      const { type, project_key, timestamp, ...rest } = event;
-
-      const result = await db.query<{ id: number; sequence: number }>(
-        `INSERT INTO events (type, project_key, timestamp, data)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, sequence`,
-        [type, project_key, timestamp, JSON.stringify(rest)],
-      );
-
-      const row = result.rows[0];
-      if (!row) {
-        throw new Error("Failed to insert event - no row returned");
-      }
-      const { id, sequence } = row;
-      const enrichedEvent = { ...event, id, sequence };
-
-      await updateMaterializedViews(db, enrichedEvent);
-      results.push(enrichedEvent);
-    }
-    await db.exec("COMMIT");
-  } catch (e) {
-    // FIX: Log rollback failures (connection lost, etc)
+    await db.exec("BEGIN");
     try {
-      await db.exec("ROLLBACK");
-    } catch (rollbackError) {
-      console.error("[SwarmMail] ROLLBACK failed:", rollbackError);
-    }
-    throw e;
-  }
+      for (const event of events) {
+        const { type, project_key, timestamp, ...rest } = event;
 
-  return results;
+        const result = await db.query<{ id: number; sequence: number }>(
+          `INSERT INTO events (type, project_key, timestamp, data)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, sequence`,
+          [type, project_key, timestamp, JSON.stringify(rest)],
+        );
+
+        const row = result.rows[0];
+        if (!row) {
+          throw new Error("Failed to insert event - no row returned");
+        }
+        const { id, sequence } = row;
+        const enrichedEvent = { ...event, id, sequence };
+
+        await updateMaterializedViews(db, enrichedEvent);
+        results.push(enrichedEvent);
+      }
+      await db.exec("COMMIT");
+    } catch (e) {
+      // FIX: Log rollback failures (connection lost, etc)
+      try {
+        await db.exec("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("[SwarmMail] ROLLBACK failed:", rollbackError);
+      }
+      throw e;
+    }
+
+    return results;
+  });
 }
 
 /**
@@ -165,76 +167,79 @@ export async function readEvents(
   } = {},
   projectPath?: string,
 ): Promise<Array<AgentEvent & { id: number; sequence: number }>> {
-  const db = await getDatabase(projectPath);
+  return withTiming("readEvents", async () => {
+    const db = await getDatabase(projectPath);
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  let paramIndex = 1;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
 
-  if (options.projectKey) {
-    conditions.push(`project_key = $${paramIndex++}`);
-    params.push(options.projectKey);
-  }
+    if (options.projectKey) {
+      conditions.push(`project_key = $${paramIndex++}`);
+      params.push(options.projectKey);
+    }
 
-  if (options.types && options.types.length > 0) {
-    conditions.push(`type = ANY($${paramIndex++})`);
-    params.push(options.types);
-  }
+    if (options.types && options.types.length > 0) {
+      conditions.push(`type = ANY($${paramIndex++})`);
+      params.push(options.types);
+    }
 
-  if (options.since !== undefined) {
-    conditions.push(`timestamp >= $${paramIndex++}`);
-    params.push(options.since);
-  }
+    if (options.since !== undefined) {
+      conditions.push(`timestamp >= $${paramIndex++}`);
+      params.push(options.since);
+    }
 
-  if (options.until !== undefined) {
-    conditions.push(`timestamp <= $${paramIndex++}`);
-    params.push(options.until);
-  }
+    if (options.until !== undefined) {
+      conditions.push(`timestamp <= $${paramIndex++}`);
+      params.push(options.until);
+    }
 
-  if (options.afterSequence !== undefined) {
-    conditions.push(`sequence > $${paramIndex++}`);
-    params.push(options.afterSequence);
-  }
+    if (options.afterSequence !== undefined) {
+      conditions.push(`sequence > $${paramIndex++}`);
+      params.push(options.afterSequence);
+    }
 
-  const whereClause =
-    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  let query = `
-    SELECT id, type, project_key, timestamp, sequence, data
-    FROM events
-    ${whereClause}
-    ORDER BY sequence ASC
-  `;
+    let query = `
+      SELECT id, type, project_key, timestamp, sequence, data
+      FROM events
+      ${whereClause}
+      ORDER BY sequence ASC
+    `;
 
-  if (options.limit) {
-    query += ` LIMIT $${paramIndex++}`;
-    params.push(options.limit);
-  }
+    if (options.limit) {
+      query += ` LIMIT $${paramIndex++}`;
+      params.push(options.limit);
+    }
 
-  if (options.offset) {
-    query += ` OFFSET $${paramIndex++}`;
-    params.push(options.offset);
-  }
+    if (options.offset) {
+      query += ` OFFSET $${paramIndex++}`;
+      params.push(options.offset);
+    }
 
-  const result = await db.query<{
-    id: number;
-    type: string;
-    project_key: string;
-    timestamp: string;
-    sequence: number;
-    data: string;
-  }>(query, params);
+    const result = await db.query<{
+      id: number;
+      type: string;
+      project_key: string;
+      timestamp: string;
+      sequence: number;
+      data: string;
+    }>(query, params);
 
-  return result.rows.map((row) => {
-    const data = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
-    return {
-      id: row.id,
-      type: row.type as AgentEvent["type"],
-      project_key: row.project_key,
-      timestamp: parseTimestamp(row.timestamp as string),
-      sequence: row.sequence,
-      ...data,
-    } as AgentEvent & { id: number; sequence: number };
+    return result.rows.map((row) => {
+      const data =
+        typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      return {
+        id: row.id,
+        type: row.type as AgentEvent["type"],
+        project_key: row.project_key,
+        timestamp: parseTimestamp(row.timestamp as string),
+        sequence: row.sequence,
+        ...data,
+      } as AgentEvent & { id: number; sequence: number };
+    });
   });
 }
 
@@ -273,56 +278,58 @@ export async function replayEvents(
   } = {},
   projectPath?: string,
 ): Promise<{ eventsReplayed: number; duration: number }> {
-  const startTime = Date.now();
-  const db = await getDatabase(projectPath);
+  return withTiming("replayEvents", async () => {
+    const startTime = Date.now();
+    const db = await getDatabase(projectPath);
 
-  // Optionally clear materialized views
-  if (options.clearViews) {
-    if (options.projectKey) {
-      // Use parameterized queries to prevent SQL injection
-      await db.query(
-        `DELETE FROM message_recipients WHERE message_id IN (
-          SELECT id FROM messages WHERE project_key = $1
-        )`,
-        [options.projectKey],
-      );
-      await db.query(`DELETE FROM messages WHERE project_key = $1`, [
-        options.projectKey,
-      ]);
-      await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
-        options.projectKey,
-      ]);
-      await db.query(`DELETE FROM agents WHERE project_key = $1`, [
-        options.projectKey,
-      ]);
-    } else {
-      await db.exec(`
-        DELETE FROM message_recipients;
-        DELETE FROM messages;
-        DELETE FROM reservations;
-        DELETE FROM agents;
-      `);
+    // Optionally clear materialized views
+    if (options.clearViews) {
+      if (options.projectKey) {
+        // Use parameterized queries to prevent SQL injection
+        await db.query(
+          `DELETE FROM message_recipients WHERE message_id IN (
+            SELECT id FROM messages WHERE project_key = $1
+          )`,
+          [options.projectKey],
+        );
+        await db.query(`DELETE FROM messages WHERE project_key = $1`, [
+          options.projectKey,
+        ]);
+        await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
+          options.projectKey,
+        ]);
+        await db.query(`DELETE FROM agents WHERE project_key = $1`, [
+          options.projectKey,
+        ]);
+      } else {
+        await db.exec(`
+          DELETE FROM message_recipients;
+          DELETE FROM messages;
+          DELETE FROM reservations;
+          DELETE FROM agents;
+        `);
+      }
     }
-  }
 
-  // Read all events
-  const events = await readEvents(
-    {
-      projectKey: options.projectKey,
-      afterSequence: options.fromSequence,
-    },
-    projectPath,
-  );
+    // Read all events
+    const events = await readEvents(
+      {
+        projectKey: options.projectKey,
+        afterSequence: options.fromSequence,
+      },
+      projectPath,
+    );
 
-  // Replay each event
-  for (const event of events) {
-    await updateMaterializedViews(db, event);
-  }
+    // Replay each event
+    for (const event of events) {
+      await updateMaterializedViews(db, event);
+    }
 
-  return {
-    eventsReplayed: events.length,
-    duration: Date.now() - startTime,
-  };
+    return {
+      eventsReplayed: events.length,
+      duration: Date.now() - startTime,
+    };
+  });
 }
 
 /**
@@ -365,76 +372,80 @@ export async function replayEventsBatched(
   } = {},
   projectPath?: string,
 ): Promise<{ eventsReplayed: number; duration: number }> {
-  const startTime = Date.now();
-  const batchSize = options.batchSize ?? 1000;
-  const fromSequence = options.fromSequence ?? 0;
-  const db = await getDatabase(projectPath);
+  return withTiming("replayEventsBatched", async () => {
+    const startTime = Date.now();
+    const batchSize = options.batchSize ?? 1000;
+    const fromSequence = options.fromSequence ?? 0;
+    const db = await getDatabase(projectPath);
 
-  // Optionally clear materialized views
-  if (options.clearViews) {
-    await db.query(
-      `DELETE FROM message_recipients WHERE message_id IN (
-        SELECT id FROM messages WHERE project_key = $1
-      )`,
-      [projectKey],
-    );
-    await db.query(`DELETE FROM messages WHERE project_key = $1`, [projectKey]);
-    await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
-      projectKey,
-    ]);
-    await db.query(`DELETE FROM agents WHERE project_key = $1`, [projectKey]);
-  }
-
-  // Get total count first
-  const countResult = await db.query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM events WHERE project_key = $1 AND sequence > $2`,
-    [projectKey, fromSequence],
-  );
-  const total = parseInt(countResult.rows[0]?.count ?? "0");
-
-  if (total === 0) {
-    return { eventsReplayed: 0, duration: Date.now() - startTime };
-  }
-
-  let processed = 0;
-  let offset = 0;
-
-  while (processed < total) {
-    // Fetch batch
-    const events = await readEvents(
-      {
+    // Optionally clear materialized views
+    if (options.clearViews) {
+      await db.query(
+        `DELETE FROM message_recipients WHERE message_id IN (
+          SELECT id FROM messages WHERE project_key = $1
+        )`,
+        [projectKey],
+      );
+      await db.query(`DELETE FROM messages WHERE project_key = $1`, [
         projectKey,
-        afterSequence: fromSequence,
-        limit: batchSize,
-        offset,
-      },
-      projectPath,
-    );
-
-    if (events.length === 0) break;
-
-    // Update materialized views for this batch
-    for (const event of events) {
-      await updateMaterializedViews(db, event);
+      ]);
+      await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
+        projectKey,
+      ]);
+      await db.query(`DELETE FROM agents WHERE project_key = $1`, [projectKey]);
     }
 
-    processed += events.length;
-    const percent = Math.round((processed / total) * 100);
-
-    // Report progress
-    await onBatch(events, { processed, total, percent });
-
-    console.log(
-      `[SwarmMail] Replaying events: ${processed}/${total} (${percent}%)`,
+    // Get total count first
+    const countResult = await db.query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM events WHERE project_key = $1 AND sequence > $2`,
+      [projectKey, fromSequence],
     );
+    const total = parseInt(countResult.rows[0]?.count ?? "0");
 
-    offset += batchSize;
-  }
+    if (total === 0) {
+      return { eventsReplayed: 0, duration: Date.now() - startTime };
+    }
 
-  return {
-    eventsReplayed: processed,
-    duration: Date.now() - startTime,
-  };
+    let processed = 0;
+    let offset = 0;
+
+    while (processed < total) {
+      // Fetch batch
+      const events = await readEvents(
+        {
+          projectKey,
+          afterSequence: fromSequence,
+          limit: batchSize,
+          offset,
+        },
+        projectPath,
+      );
+
+      if (events.length === 0) break;
+
+      // Update materialized views for this batch
+      for (const event of events) {
+        await updateMaterializedViews(db, event);
+      }
+
+      processed += events.length;
+      const percent = Math.round((processed / total) * 100);
+
+      // Report progress
+      await onBatch(events, { processed, total, percent });
+
+      console.log(
+        `[SwarmMail] Replaying events: ${processed}/${total} (${percent}%)`,
+      );
+
+      offset += batchSize;
+    }
+
+    return {
+      eventsReplayed: processed,
+      duration: Date.now() - startTime,
+    };
+  });
 }
 
 // ============================================================================

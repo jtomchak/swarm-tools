@@ -19,10 +19,15 @@ export const PatternKindSchema = z.enum(["pattern", "anti_pattern"]);
 export type PatternKind = z.infer<typeof PatternKindSchema>;
 
 /**
- * A decomposition pattern that has been observed
+ * Decomposition pattern with success/failure tracking.
  *
- * Patterns are extracted from successful/failed decompositions and
- * tracked over time to learn what works and what doesn't.
+ * Field relationships:
+ * - `kind`: Tracks pattern lifecycle ("pattern" → "anti_pattern" when failure rate exceeds threshold)
+ * - `is_negative`: Derived boolean flag for quick filtering (true when kind === "anti_pattern")
+ *
+ * Both fields exist because:
+ * - `kind` is the source of truth for pattern status
+ * - `is_negative` enables efficient filtering without string comparison
  */
 export const DecompositionPatternSchema = z.object({
   /** Unique ID for this pattern */
@@ -68,6 +73,9 @@ export type PatternInversionResult = z.infer<
 // ============================================================================
 // Configuration
 // ============================================================================
+
+/** Maximum number of example beads to keep per pattern */
+const MAX_EXAMPLE_BEADS = 10;
 
 /**
  * Configuration for anti-pattern detection
@@ -186,7 +194,7 @@ export function recordPatternObservation(
     failure_count: success ? pattern.failure_count : pattern.failure_count + 1,
     updated_at: new Date().toISOString(),
     example_beads: beadId
-      ? [...pattern.example_beads.slice(-9), beadId] // Keep last 10
+      ? [...pattern.example_beads.slice(-(MAX_EXAMPLE_BEADS - 1)), beadId]
       : pattern.example_beads,
   };
 
@@ -216,8 +224,16 @@ export function recordPatternObservation(
 export function extractPatternsFromDescription(description: string): string[] {
   const patterns: string[] = [];
 
-  // Common decomposition strategies to detect
-  const strategyPatterns = [
+  /**
+   * Regex patterns for detecting common decomposition strategies.
+   *
+   * Detection is keyword-based and not exhaustive - patterns can be
+   * manually created for novel strategies not covered here.
+   *
+   * Each pattern maps a regex to a strategy name that will be extracted
+   * from task descriptions during pattern observation.
+   */
+  const strategyPatterns: Array<{ regex: RegExp; pattern: string }> = [
     {
       regex: /split(?:ting)?\s+by\s+file\s+type/i,
       pattern: "Split by file type",
@@ -322,15 +338,17 @@ export function formatAntiPatternsForPrompt(
 }
 
 /**
- * Format successful patterns for inclusion in decomposition prompts
+ * Format successful patterns for inclusion in prompts.
  *
- * @param patterns - Patterns to format
- * @param minSuccessRate - Minimum success rate to include (0-1)
- * @returns Formatted string for prompt inclusion
+ * @param patterns - Array of decomposition patterns to filter and format
+ * @param minSuccessRate - Minimum success rate to include (default 0.7 = 70%).
+ *   Chosen to filter out patterns with marginal track records - only patterns
+ *   that succeed at least 70% of the time are recommended.
+ * @returns Formatted string of successful patterns for prompt injection
  */
 export function formatSuccessfulPatternsForPrompt(
   patterns: DecompositionPattern[],
-  minSuccessRate: number = 0.7,
+  minSuccessRate = 0.7,
 ): string {
   const successful = patterns.filter((p) => {
     if (p.kind === "anti_pattern") return false;

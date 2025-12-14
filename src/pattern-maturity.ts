@@ -13,6 +13,16 @@ import { z } from "zod";
 import { calculateDecayedValue } from "./learning";
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * Tolerance for floating-point comparisons.
+ * Used when comparing success rates to avoid floating-point precision issues.
+ */
+const FLOAT_EPSILON = 0.01;
+
+// ============================================================================
 // Schemas
 // ============================================================================
 
@@ -164,26 +174,26 @@ export function calculateMaturityState(
   );
 
   const total = decayedHelpful + decayedHarmful;
-  const epsilon = 0.01; // Float comparison tolerance
-  const safeTotal = total > epsilon ? total : 0;
+  // Use FLOAT_EPSILON constant (defined at module level)
+  const safeTotal = total > FLOAT_EPSILON ? total : 0;
   const harmfulRatio = safeTotal > 0 ? decayedHarmful / safeTotal : 0;
 
   // Deprecated: high harmful ratio with enough feedback
   if (
     harmfulRatio > config.deprecationThreshold &&
-    safeTotal >= config.minFeedback - epsilon
+    safeTotal >= config.minFeedback - FLOAT_EPSILON
   ) {
     return "deprecated";
   }
 
   // Candidate: not enough feedback yet
-  if (safeTotal < config.minFeedback - epsilon) {
+  if (safeTotal < config.minFeedback - FLOAT_EPSILON) {
     return "candidate";
   }
 
   // Proven: strong positive signal
   if (
-    decayedHelpful >= config.minHelpful - epsilon &&
+    decayedHelpful >= config.minHelpful - FLOAT_EPSILON &&
     harmfulRatio < config.maxHarmful
   ) {
     return "proven";
