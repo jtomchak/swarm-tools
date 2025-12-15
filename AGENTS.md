@@ -258,6 +258,18 @@ bunx changeset publish
 - npm CLI 11.5.1+ auto-detects OIDC environment and authenticates
 - Provenance attestations generated automatically
 
+### workspace:* Protocol Resolution
+
+**Problem:** `workspace:*` in package.json dependencies doesn't get resolved by `npm publish` or `bunx changeset publish`, causing install failures.
+
+**Solution:** Custom `scripts/publish.ts` uses a two-step process:
+1. `bun pm pack` - Creates tarball with `workspace:*` resolved to actual versions (e.g., `0.1.0`)
+2. `npm publish <tarball>` - Publishes the tarball with OIDC trusted publisher support
+
+**Why not just `bun publish`?** Bun publish resolves workspace protocols but doesn't support npm OIDC - it requires `npm login`.
+
+**Key gotcha:** CLI bin scripts need their imports in `dependencies`, not `devDependencies`. If `bin/swarm.ts` imports `@clack/prompts`, it must be in dependencies or users get "Cannot find module" errors.
+
 ### Configured Packages
 
 | Package | npm | Trusted Publisher |
