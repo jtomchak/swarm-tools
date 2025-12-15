@@ -1,0 +1,14 @@
+{
+  "title": "Guide",
+  "description": "Learn how to use Swarm Tools effectively",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "philosophy",
+    "patterns",
+    "---",
+    "roadmap",
+    "credits"
+  ]
+}

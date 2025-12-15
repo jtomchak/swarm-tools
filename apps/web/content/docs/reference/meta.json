@@ -1,0 +1,10 @@
+{
+  "title": "Reference",
+  "description": "API documentation and tool reference",
+  "root": true,
+  "pages": [
+    "index",
+    "opencode-plugin",
+    "swarm-mail"
+  ]
+}
