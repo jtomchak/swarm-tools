@@ -7,8 +7,7 @@ dist
 *.tgz
 .next
 
-# fumadocs generated
-.source
+# fumadocs generated - NOTE: .source is committed for CI type checking
 
 # code coverage
 coverage
