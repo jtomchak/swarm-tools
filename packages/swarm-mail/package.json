@@ -22,7 +22,7 @@
   "author": "Joel Hooks",
   "license": "MIT",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node && tsc",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --external @electric-sql/pglite && tsc",
     "test": "vitest run --exclude '**/*.integration.test.ts'",
     "test:integration": "vitest run --include '**/*.integration.test.ts' --testTimeout 60000",
     "test:all": "vitest run --testTimeout 60000",
