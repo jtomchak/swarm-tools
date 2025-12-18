@@ -531,7 +531,7 @@ export function createHiveAdapter(
     // ============================================================================
 
     async runMigrations(projectPath?) {
-      const { beadsMigration } = await import("./migrations.js");
+      const { hiveMigrations } = await import("./migrations.js");
       
       // Ensure schema_version table exists first
       await db.exec(`
@@ -542,18 +542,29 @@ export function createHiveAdapter(
         );
       `);
       
-      await db.exec("BEGIN");
-      try {
-        await db.exec(beadsMigration.up);
-        await db.query(
-          `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)
-           ON CONFLICT (version) DO NOTHING`,
-          [beadsMigration.version, Date.now(), beadsMigration.description],
-        );
-        await db.exec("COMMIT");
-      } catch (error) {
-        await db.exec("ROLLBACK");
-        throw error;
+      // Get current schema version
+      const versionResult = await db.query<{ version: number }>(
+        "SELECT MAX(version) as version FROM schema_version"
+      );
+      const currentVersion = versionResult.rows[0]?.version ?? 0;
+      
+      // Apply pending migrations
+      for (const migration of hiveMigrations) {
+        if (migration.version > currentVersion) {
+          await db.exec("BEGIN");
+          try {
+            await db.exec(migration.up);
+            await db.query(
+              `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)
+               ON CONFLICT (version) DO NOTHING`,
+              [migration.version, Date.now(), migration.description],
+            );
+            await db.exec("COMMIT");
+          } catch (error) {
+            await db.exec("ROLLBACK");
+            throw error;
+          }
+        }
       }
     },
 

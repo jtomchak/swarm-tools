@@ -154,6 +154,102 @@ export const beadsMigration: Migration = {
 };
 
 /**
- * Export as array for convenience
+ * Migration v7: Add cells view for beads→hive rename compatibility
+ *
+ * Creates a view called `cells` that points to the `beads` table.
+ * This allows code that references `cells` to work with existing `beads` data.
+ *
+ * The view is updatable via INSTEAD OF triggers for INSERT/UPDATE/DELETE.
+ */
+export const cellsViewMigration: Migration = {
+  version: 7,
+  description: "Add cells view for beads→hive rename compatibility",
+  up: `
+    -- ========================================================================
+    -- Cells View (alias for beads table)
+    -- ========================================================================
+    -- This view allows code to reference "cells" while data lives in "beads"
+    CREATE OR REPLACE VIEW cells AS SELECT * FROM beads;
+
+    -- INSTEAD OF INSERT trigger
+    CREATE OR REPLACE FUNCTION cells_insert_trigger()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      INSERT INTO beads VALUES (NEW.*);
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS cells_insert ON cells;
+    CREATE TRIGGER cells_insert
+      INSTEAD OF INSERT ON cells
+      FOR EACH ROW
+      EXECUTE FUNCTION cells_insert_trigger();
+
+    -- INSTEAD OF UPDATE trigger
+    CREATE OR REPLACE FUNCTION cells_update_trigger()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      UPDATE beads SET
+        project_key = NEW.project_key,
+        type = NEW.type,
+        status = NEW.status,
+        title = NEW.title,
+        description = NEW.description,
+        priority = NEW.priority,
+        parent_id = NEW.parent_id,
+        assignee = NEW.assignee,
+        created_at = NEW.created_at,
+        updated_at = NEW.updated_at,
+        closed_at = NEW.closed_at,
+        closed_reason = NEW.closed_reason,
+        deleted_at = NEW.deleted_at,
+        deleted_by = NEW.deleted_by,
+        delete_reason = NEW.delete_reason,
+        created_by = NEW.created_by
+      WHERE id = OLD.id;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS cells_update ON cells;
+    CREATE TRIGGER cells_update
+      INSTEAD OF UPDATE ON cells
+      FOR EACH ROW
+      EXECUTE FUNCTION cells_update_trigger();
+
+    -- INSTEAD OF DELETE trigger
+    CREATE OR REPLACE FUNCTION cells_delete_trigger()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      DELETE FROM beads WHERE id = OLD.id;
+      RETURN OLD;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS cells_delete ON cells;
+    CREATE TRIGGER cells_delete
+      INSTEAD OF DELETE ON cells
+      FOR EACH ROW
+      EXECUTE FUNCTION cells_delete_trigger();
+  `,
+  down: `
+    DROP TRIGGER IF EXISTS cells_delete ON cells;
+    DROP TRIGGER IF EXISTS cells_update ON cells;
+    DROP TRIGGER IF EXISTS cells_insert ON cells;
+    DROP FUNCTION IF EXISTS cells_delete_trigger();
+    DROP FUNCTION IF EXISTS cells_update_trigger();
+    DROP FUNCTION IF EXISTS cells_insert_trigger();
+    DROP VIEW IF EXISTS cells;
+  `,
+};
+
+/**
+ * Export individual migrations
  */
 export const beadsMigrations: Migration[] = [beadsMigration];
+
+/**
+ * All hive migrations in order
+ */
+export const hiveMigrations: Migration[] = [beadsMigration, cellsViewMigration];

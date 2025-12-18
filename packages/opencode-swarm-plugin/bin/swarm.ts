@@ -336,46 +336,8 @@ const DEPENDENCIES: Dependency[] = [
     installType: "brew",
     description: "AI coding assistant (plugin host)",
   },
-  {
-    name: "Beads",
-    command: "bd",
-    checkArgs: ["--version"],
-    required: true,
-    install:
-      "curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash",
-    installType: "curl",
-    description: "Git-backed issue tracking",
-  },
-  {
-    name: "Go",
-    command: "go",
-    checkArgs: ["version"],
-    required: false,
-    install: "brew install go",
-    installType: "brew",
-    description: "Required for Agent Mail",
-  },
-  {
-    name: "MCP Agent Mail",
-    command: "curl",
-    checkArgs: [
-      "-s",
-      "-X",
-      "POST",
-      "http://localhost:8765/mcp",
-      "-H",
-      "Content-Type: application/json",
-      "-d",
-      "{}",
-      "-o",
-      "/dev/null",
-    ],
-    required: false,
-    install: "https://github.com/Dicklesworthstone/mcp_agent_mail",
-    installType: "manual",
-    description:
-      "Multi-agent coordination & file reservations (like Gmail for coding agents)",
-  },
+  // Note: Beads CLI (bd) is NO LONGER required - we use HiveAdapter from swarm-mail
+  // which provides the same functionality programmatically without external dependencies
   {
     name: "CASS (Coding Agent Session Search)",
     command: "cass",
@@ -1136,16 +1098,10 @@ function getFixCommand(dep: Dependency): string | null {
   switch (dep.name) {
     case "OpenCode":
       return "brew install sst/tap/opencode";
-    case "Beads":
-      return "curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash";
-    case "Go":
-      return "brew install go (or visit https://go.dev/dl/)";
     case "semantic-memory":
       return "npm install -g semantic-memory";
     case "Redis":
       return "brew install redis && brew services start redis";
-    case "MCP Agent Mail":
-      return "See: https://github.com/Dicklesworthstone/mcp_agent_mail";
     case "CASS (Coding Agent Session Search)":
       return "See: https://github.com/Dicklesworthstone/coding_agent_session_search";
     case "UBS (Ultimate Bug Scanner)":

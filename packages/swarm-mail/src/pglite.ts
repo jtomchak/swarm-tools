@@ -24,12 +24,12 @@
  */
 
 import { PGlite } from "@electric-sql/pglite";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import { createSwarmMailAdapter } from "./adapter";
 import type { DatabaseAdapter, SwarmMailAdapter } from "./types";
-import { existsSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { createHash } from "node:crypto";
 import { createSocketAdapter } from "./socket-adapter";
 import { isDaemonRunning, startDaemon, healthCheck } from "./daemon";
 
@@ -127,6 +127,80 @@ const instances = new Map<
 >();
 
 /**
+ * Check if an error is a WASM abort error from PGLite
+ *
+ * These errors occur when:
+ * - A stale postmaster.pid file exists from a crashed session
+ * - The database directory is corrupted
+ * - WASM memory is in an invalid state
+ *
+ * @param error - The error to check
+ * @returns true if this is a recoverable WASM abort error
+ */
+function isWasmAbortError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("aborted") ||
+      message.includes("unreachable code") ||
+      message.includes("runtimeerror")
+    );
+  }
+  return false;
+}
+
+/**
+ * Create a PGLite instance with automatic recovery from corrupted databases
+ *
+ * If PGLite fails to initialize due to WASM abort (usually from stale postmaster.pid),
+ * this function will:
+ * 1. Delete the corrupted database directory
+ * 2. Retry creating a fresh PGLite instance
+ *
+ * This is safe because the streams database is ephemeral coordination state.
+ * Persistent data (beads, semantic memory) is stored elsewhere.
+ *
+ * @param dbPath - Path to the database directory
+ * @returns PGLite instance
+ * @throws Error if recovery also fails
+ */
+async function createPGliteWithRecovery(dbPath: string): Promise<PGlite> {
+  try {
+    const pglite = new PGlite(dbPath);
+    // PGLite initialization is lazy - force it to actually connect
+    // by running a simple query. This surfaces WASM errors early.
+    await pglite.query("SELECT 1");
+    return pglite;
+  } catch (error) {
+    if (isWasmAbortError(error)) {
+      console.warn(
+        `[swarm-mail] PGLite WASM abort detected, recovering by deleting corrupted database: ${dbPath}`
+      );
+
+      // Delete the corrupted database directory
+      if (existsSync(dbPath)) {
+        rmSync(dbPath, { recursive: true, force: true });
+      }
+
+      // Retry with fresh database
+      try {
+        const pglite = new PGlite(dbPath);
+        await pglite.query("SELECT 1");
+        console.log("[swarm-mail] Successfully recovered from corrupted database");
+        return pglite;
+      } catch (retryError) {
+        throw new Error(
+          `Failed to recover PGLite database after deleting corrupted data: ${retryError instanceof Error ? retryError.message : String(retryError)}`
+        );
+      }
+    }
+
+    // Not a WASM abort error - rethrow
+    throw error;
+  }
+}
+
+/**
  * Get or create SwarmMail instance for a project
  *
  * Uses singleton pattern - one instance per database path.
@@ -182,7 +256,8 @@ export async function getSwarmMail(
     }
 
     // Embedded PGlite mode (default or fallback)
-    const pglite = new PGlite(dbPath);
+    // Use recovery wrapper to handle corrupted databases from crashed sessions
+    const pglite = await createPGliteWithRecovery(dbPath);
     const db = wrapPGlite(pglite);
     const adapter = createSwarmMailAdapter(db, projectKey);
     await adapter.runMigrations();

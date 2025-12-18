@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { PGlite } from "@electric-sql/pglite";
-import { beadsMigration } from "./migrations.js";
+import { beadsMigration, hiveMigrations } from "./migrations.js";
 import { createHiveAdapter } from "./adapter.js";
 import type { HiveAdapter } from "../types/hive-adapter.js";
 import type { DatabaseAdapter } from "../types/database.js";
@@ -24,7 +24,7 @@ import {
   parseJSONL,
   serializeToJSONL,
   computeContentHash,
-  type BeadExport,
+  type CellExport,
 } from "./jsonl.js";
 
 function wrapPGlite(pglite: PGlite): DatabaseAdapter {
@@ -64,15 +64,17 @@ describe("JSONL Export/Import", () => {
       );
     `);
 
-    // Run migrations
+    // Run ALL hive migrations (v6 beads + v7 cells view)
     const db = wrapPGlite(pglite);
-    await pglite.exec("BEGIN");
-    await pglite.exec(beadsMigration.up);
-    await pglite.query(
-      `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)`,
-      [beadsMigration.version, Date.now(), beadsMigration.description],
-    );
-    await pglite.exec("COMMIT");
+    for (const migration of hiveMigrations) {
+      await pglite.exec("BEGIN");
+      await pglite.exec(migration.up);
+      await pglite.query(
+        `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)`,
+        [migration.version, Date.now(), migration.description],
+      );
+      await pglite.exec("COMMIT");
+    }
 
     adapter = createHiveAdapter(db, projectKey);
   });
@@ -82,7 +84,7 @@ describe("JSONL Export/Import", () => {
   });
 
   describe("serializeToJSONL", () => {
-    it("serializes bead to single JSONL line", () => {
+    it("serializes cell to single JSONL line", () => {
       const cell: CellExport = {
         id: "bd-abc123",
         title: "Fix bug",
@@ -97,13 +99,13 @@ describe("JSONL Export/Import", () => {
         comments: [],
       };
 
-      const line = serializeToJSONL(bead);
+      const line = serializeToJSONL(cell);
 
       expect(line).not.toContain("\n");
-      expect(JSON.parse(line)).toEqual(bead);
+      expect(JSON.parse(line)).toEqual(cell);
     });
 
-    it("serializes bead with dependencies, labels, comments", () => {
+    it("serializes cell with dependencies, labels, comments", () => {
       const cell: CellExport = {
         id: "bd-abc123",
         title: "Feature",
@@ -121,8 +123,8 @@ describe("JSONL Export/Import", () => {
         ],
       };
 
-      const line = serializeToJSONL(bead);
-      const parsed = JSON.parse(line) as BeadExport;
+      const line = serializeToJSONL(cell);
+      const parsed = JSON.parse(line) as CellExport;
 
       expect(parsed.dependencies).toHaveLength(1);
       expect(parsed.labels).toHaveLength(2);
@@ -200,15 +202,15 @@ describe("JSONL Export/Import", () => {
         comments: [],
       };
 
-      const hash1 = computeContentHash(bead);
-      const hash2 = computeContentHash(bead);
+      const hash1 = computeContentHash(cell);
+      const hash2 = computeContentHash(cell);
 
       expect(hash1).toBe(hash2);
       expect(hash1).toHaveLength(64); // SHA-256 hex
     });
 
     it("different hash for different content", () => {
-      const bead1: BeadExport = {
+      const cell1: CellExport = {
         id: "bd-abc123",
         title: "Fix bug",
         status: "open",
@@ -221,16 +223,16 @@ describe("JSONL Export/Import", () => {
         comments: [],
       };
 
-      const bead2: BeadExport = {
-        ...bead1,
+      const cell2: CellExport = {
+        ...cell1,
         title: "Fix different bug",
       };
 
-      expect(computeContentHash(bead1)).not.toBe(computeContentHash(bead2));
+      expect(computeContentHash(cell1)).not.toBe(computeContentHash(cell2));
     });
 
-    it("same hash ignoring timestamps", () => {
-      const bead1: BeadExport = {
+    it("different hash for different timestamps", () => {
+      const cell1: CellExport = {
         id: "bd-abc123",
         title: "Fix bug",
         status: "open",
@@ -243,13 +245,13 @@ describe("JSONL Export/Import", () => {
         comments: [],
       };
 
-      const bead2: BeadExport = {
-        ...bead1,
+      const cell2: CellExport = {
+        ...cell1,
         updated_at: "2024-01-02T00:00:00Z", // Different timestamp
       };
 
       // Hash should be different because we include timestamps
-      expect(computeContentHash(bead1)).not.toBe(computeContentHash(bead2));
+      expect(computeContentHash(cell1)).not.toBe(computeContentHash(cell2));
     });
   });
 

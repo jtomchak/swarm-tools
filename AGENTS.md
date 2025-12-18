@@ -42,6 +42,59 @@ await adapter.closeCell(cellId, "Done");
 
 Run tests continuously: `bun turbo test --filter=<package>`
 
+## Testing Strategy: Speed Matters
+
+Slow tests don't get run. Fast tests catch bugs early.
+
+### Test Tiers
+
+| Tier | Suffix | Speed | Dependencies | When to Run |
+|------|--------|-------|--------------|-------------|
+| Unit | `.test.ts` | <100ms | None | Every save |
+| Integration | `.integration.test.ts` | <5s | PGLite, filesystem | Pre-commit |
+| E2E | `.e2e.test.ts` | <30s | External services | CI only |
+
+### Rules for Fast Tests
+
+1. **Prefer in-memory databases** - Use `createInMemorySwarmMail()` over file-based PGLite
+2. **Share instances when possible** - Use `beforeAll`/`afterAll` for expensive setup, not `beforeEach`/`afterEach`
+3. **Don't skip tests** - If a test needs external services, mock them or make them optional
+4. **Clean up after yourself** - But don't recreate the world for each test
+
+### PGLite Testing Pattern
+
+```typescript
+// GOOD: Shared instance for related tests
+describe("feature X", () => {
+  let swarmMail: SwarmMailAdapter;
+  
+  beforeAll(async () => {
+    swarmMail = await createInMemorySwarmMail("test");
+  });
+  
+  afterAll(async () => {
+    await swarmMail.close();
+  });
+  
+  test("does thing A", async () => { /* uses swarmMail */ });
+  test("does thing B", async () => { /* uses swarmMail */ });
+});
+
+// BAD: New instance per test (slow, wasteful)
+beforeEach(async () => {
+  swarmMail = await createInMemorySwarmMail("test");
+});
+```
+
+### Anti-Patterns to Avoid
+
+- Creating new database instances per test
+- `test.skip()` without a tracking issue
+- Tests that pass by accident (no assertions)
+- Tests that only run in CI
+
+See `TEST-STATUS.md` for full testing documentation.
+
 ## Structure
 
 ```

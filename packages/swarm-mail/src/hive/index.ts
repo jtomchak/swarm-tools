@@ -80,7 +80,7 @@ export { createHiveAdapter } from "./adapter.js";
 export { createHiveAdapter as createBeadsAdapter } from "./adapter.js";
 
 // Migrations
-export { beadsMigration, beadsMigrations } from "./migrations.js";
+export { beadsMigration, beadsMigrations, cellsViewMigration, hiveMigrations } from "./migrations.js";
 
 // Store operations
 export {
