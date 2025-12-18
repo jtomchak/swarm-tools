@@ -140,13 +140,36 @@ Bundled skills include:
 | `swarmmail_reserve()` | Reserve files for editing |
 | `swarm_complete()` | Complete task with cleanup |
 | `skills_use()` | Load domain expertise |
+| `semantic-memory_store()` | Store learnings for future sessions |
+| `semantic-memory_find()` | Search past learnings by meaning |
+
+## Using Semantic Memory
+
+Store learnings for future sessions:
+
+```typescript
+// After solving a tricky bug
+semantic-memory_store({
+  information: "OAuth refresh tokens need 5min buffer before expiry...",
+  tags: "auth,tokens,debugging"
+})
+
+// Before starting similar work
+semantic-memory_find({
+  query: "authentication token issues",
+  limit: 5
+})
+```
+
+Memories persist across sessions and are searchable by meaning (vector similarity). See [Semantic Memory](/docs/packages/swarm-mail/memory) for details.
 
 ## What's Next
 
 - [OpenCode Plugin Reference](/docs/reference/opencode-plugin) - All 40+ tools documented
 - [Philosophy](/docs/getting-started/philosophy) - Design principles and mental models
 - [Patterns](/docs/patterns) - Coordination patterns and best practices
-- [Swarm Mail Architecture](/docs/swarm-mail) - Event sourcing deep dive
+- [Swarm Mail Architecture](/docs/packages/swarm-mail) - Event sourcing deep dive
+- [Semantic Memory](/docs/packages/swarm-mail/memory) - Persistent agent learning
 
 ## Troubleshooting
 

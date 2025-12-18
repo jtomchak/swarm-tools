@@ -55,6 +55,7 @@ Traditional solutions require external servers (Redis, Kafka, NATS). Swarm Mail 
 - ✅ **Type-safe** - Effect-TS with full type inference
 - ✅ **Actor-model** - Mailboxes, envelopes, distributed promises
 - ✅ **File safety** - CAS-based locks for mutual exclusion
+- ✅ **Semantic memory** - Vector embeddings for persistent agent learning
 
 ---
 
@@ -83,6 +84,11 @@ Swarm Mail is built in **3 tiers** - primitives, patterns, and coordination laye
 │   │    DurableCursor      │    │   DurableDeferred     │                    │
 │   │  Checkpointed Reader  │    │  Distributed Promise  │                    │
 │   └───────────────────────┘    └───────────────────────┘                    │
+│              │                           │                                  │
+│   MEMORY                                 ▼                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Semantic Memory - Vector embeddings (pgvector) + Ollama            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
 │                                      │                                      │
 │   STORAGE                            ▼                                      │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │

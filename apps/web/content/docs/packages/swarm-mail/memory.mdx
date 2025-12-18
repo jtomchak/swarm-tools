@@ -1,0 +1,489 @@
+---
+title: Semantic Memory
+description: Persistent vector-based memory for agent learning and knowledge retrieval
+---
+
+# Semantic Memory
+
+```
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║                                                               ║
+    ║   🧠  SEMANTIC MEMORY  🧠                                     ║
+    ║                                                               ║
+    ║   ┌─────────────────────────────────────────────────────┐     ║
+    ║   │  "The palest ink is better than the best memory."  │     ║
+    ║   │                          — Chinese Proverb          │     ║
+    ║   └─────────────────────────────────────────────────────┘     ║
+    ║                                                               ║
+    ║   Vector embeddings + PGLite = Persistent agent learning     ║
+    ║                                                               ║
+    ╚═══════════════════════════════════════════════════════════════╝
+```
+
+## Overview
+
+**Semantic Memory** provides persistent, searchable storage for agent learnings. Built on **pgvector** (vector similarity search) with **Ollama** embeddings, it enables agents to:
+
+- **Store learnings** - Capture debugging insights, architectural decisions, domain patterns
+- **Search by meaning** - Find relevant memories via semantic similarity, not just keywords
+- **Decay over time** - Old memories fade unless validated (90-day half-life)
+- **Graceful fallback** - Full-text search when Ollama unavailable
+
+## Why Semantic Memory?
+
+Without persistent memory, agents solve the same problems repeatedly. Semantic memory breaks this cycle:
+
+| Problem | Without Memory | With Memory |
+|---------|---------------|-------------|
+| Debugging OAuth token refresh | 30min investigation | 30sec lookup |
+| Architectural decisions | Re-debate every time | Reference past reasoning |
+| Domain-specific patterns | Rediscover each session | Instant recall |
+| Tool/library gotchas | Trial and error | Known workarounds |
+
+**Key insight:** Store the *WHY*, not just the *WHAT*. Future agents need context.
+
+---
+
+## Architecture
+
+Semantic Memory is embedded in swarm-mail's PGLite instance:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        swarm-mail PGLite                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│   │   events    │  │    hive     │  │   memories + embeddings │ │
+│   │   (stream)  │  │   (cells)   │  │   (vector search)       │ │
+│   └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+│                                                                 │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │                    pgvector extension                    │   │
+│   │              (1024-dim cosine similarity)                │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │     Ollama      │
+                    │ mxbai-embed-lg  │
+                    │   (optional)    │
+                    └─────────────────┘
+```
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `memories` table | Content, metadata, tags, collection, timestamps |
+| `memory_embeddings` table | 1024-dim vectors for similarity search |
+| `pgvector` extension | Cosine similarity via `<=>` operator |
+| Ollama integration | Embedding generation (mxbai-embed-large) |
+| FTS fallback | Full-text search when Ollama unavailable |
+
+---
+
+## Quick Start
+
+### Installation
+
+Semantic memory is included in `opencode-swarm-plugin`:
+
+```bash
+bun add opencode-swarm-plugin
+```
+
+### Ollama Setup (Recommended)
+
+For vector search, install Ollama and pull the embedding model:
+
+```bash
+# Install Ollama (macOS)
+brew install ollama
+
+# Start Ollama server
+ollama serve
+
+# Pull embedding model (1024 dimensions)
+ollama pull mxbai-embed-large
+```
+
+Without Ollama, memory falls back to full-text search (still functional, less semantic).
+
+### Using the Tools
+
+The plugin exposes 8 memory tools:
+
+```typescript
+// Store a learning
+semantic-memory_store({
+  information: "OAuth refresh tokens need 5min buffer before expiry...",
+  tags: "auth,tokens,oauth",
+  metadata: JSON.stringify({ priority: "high" })
+})
+
+// Search by meaning
+semantic-memory_find({
+  query: "token refresh race condition",
+  limit: 5,
+  expand: true  // Full content, not truncated
+})
+
+// Get specific memory
+semantic-memory_get({ id: "mem-abc123" })
+
+// Validate memory (reset decay)
+semantic-memory_validate({ id: "mem-abc123" })
+
+// Remove outdated memory
+semantic-memory_remove({ id: "mem-abc123" })
+
+// List all memories
+semantic-memory_list({ collection: "default" })
+
+// Get statistics
+semantic-memory_stats()
+
+// Check Ollama health
+semantic-memory_check()
+```
+
+---
+
+## API Reference
+
+### `semantic-memory_store`
+
+Store a memory with automatic embedding generation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `information` | string | ✅ | Memory content (the learning) |
+| `collection` | string | | Collection name (default: "default") |
+| `tags` | string | | Comma-separated tags (e.g., "auth,tokens") |
+| `metadata` | string | | JSON string with additional metadata |
+
+**Returns:** `{ id: "mem-abc123" }`
+
+**Example:**
+```typescript
+semantic-memory_store({
+  information: `OAuth refresh tokens need 5min buffer before expiry to avoid 
+race conditions. Without buffer, token refresh can fail mid-request if expiry 
+happens between check and use. Implemented with: 
+if (expiresAt - Date.now() < 300000) refresh()`,
+  tags: "auth,oauth,tokens,race-conditions",
+  metadata: JSON.stringify({ 
+    source: "debugging-session",
+    files: ["src/auth/refresh.ts"]
+  })
+})
+```
+
+### `semantic-memory_find`
+
+Search memories by semantic similarity or full-text.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | ✅ | Search query |
+| `limit` | number | | Max results (default: 10) |
+| `collection` | string | | Filter by collection |
+| `expand` | boolean | | Return full content (default: false = truncated) |
+| `fts` | boolean | | Force full-text search (default: false = vector) |
+
+**Returns:** Array of `{ memory, score }` sorted by relevance.
+
+**Example:**
+```typescript
+// Vector search (semantic similarity)
+semantic-memory_find({
+  query: "authentication token expiry",
+  limit: 5,
+  expand: true
+})
+
+// Full-text search (keyword matching)
+semantic-memory_find({
+  query: "OAuth refresh",
+  fts: true
+})
+```
+
+### `semantic-memory_get`
+
+Retrieve a specific memory by ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | ✅ | Memory ID |
+
+**Returns:** Memory object or "Memory not found"
+
+### `semantic-memory_validate`
+
+Validate a memory is still accurate, resetting its decay timer.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | ✅ | Memory ID |
+
+**Returns:** `{ success: true, message: "Memory validated" }`
+
+**When to use:** After confirming a memory helped solve a problem correctly.
+
+### `semantic-memory_remove`
+
+Delete a memory permanently.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | ✅ | Memory ID |
+
+**Returns:** `{ success: true, message: "Memory removed" }`
+
+**When to use:** Memory is outdated, incorrect, or superseded.
+
+### `semantic-memory_list`
+
+List all stored memories.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `collection` | string | | Filter by collection |
+
+**Returns:** Array of memory objects.
+
+### `semantic-memory_stats`
+
+Get database statistics.
+
+**Returns:** `{ memories: 42, embeddings: 42 }`
+
+### `semantic-memory_check`
+
+Check if Ollama is available for embedding generation.
+
+**Returns:** `{ ollama: true, model: "mxbai-embed-large" }` or `{ ollama: false }`
+
+---
+
+## Memory Decay
+
+Memories decay over time using a **90-day half-life**:
+
+```
+score = raw_score × 0.5^(age_days / 90)
+```
+
+| Age | Decay Factor | Effect |
+|-----|--------------|--------|
+| 0 days | 1.0 | Full relevance |
+| 45 days | 0.71 | 71% relevance |
+| 90 days | 0.5 | 50% relevance |
+| 180 days | 0.25 | 25% relevance |
+| 1 year | 0.06 | 6% relevance |
+
+**Validation resets decay:** When you confirm a memory is still accurate via `semantic-memory_validate`, its timestamp resets to now.
+
+**Why decay?** Stale knowledge is dangerous. Outdated patterns, deprecated APIs, and superseded decisions should fade unless actively maintained.
+
+---
+
+## Best Practices
+
+### What to Store
+
+✅ **Good memories:**
+- Root causes of tricky bugs (with context)
+- Architectural decisions (with reasoning and tradeoffs)
+- Domain-specific patterns (with examples)
+- Tool/library gotchas (with workarounds)
+- Failed approaches (to avoid repeating)
+
+❌ **Bad memories:**
+- Generic knowledge (already in docs)
+- Implementation details that change frequently
+- Vague descriptions ("fixed the thing")
+- Duplicate information
+
+### Memory Format
+
+Include the **problem**, **solution**, and **reasoning**:
+
+```typescript
+// ❌ BAD: No context
+semantic-memory_store({
+  information: "Changed auth timeout to 5 minutes"
+})
+
+// ✅ GOOD: Full context
+semantic-memory_store({
+  information: `OAuth refresh tokens need 5min buffer before expiry to avoid 
+race conditions. Without buffer, token refresh can fail mid-request if expiry 
+happens between check and use. 
+
+Root cause: Token validity check happens at request start, but actual API call 
+happens after async operations. If token expires during those operations, 
+request fails with 401.
+
+Solution: if (expiresAt - Date.now() < 300000) refresh()
+
+Affects: All API clients using refresh tokens.`,
+  tags: "auth,oauth,tokens,race-conditions,api-clients"
+})
+```
+
+### When to Search
+
+**ALWAYS** query memory BEFORE:
+- Starting complex debugging
+- Making architectural decisions
+- Using unfamiliar tools/libraries
+- Implementing cross-cutting features
+
+```typescript
+// Before debugging auth issues
+semantic-memory_find({ query: "authentication error 401", limit: 5 })
+
+// Before architectural decisions
+semantic-memory_find({ query: "event sourcing tradeoffs", limit: 5 })
+```
+
+---
+
+## Migration from Standalone MCP
+
+If you were using the standalone [semantic-memory MCP server](https://github.com/joelhooks/semantic-memory), migrate your data:
+
+```typescript
+import { migrateLegacyMemories } from "swarm-mail/memory";
+
+// Migrate from ~/.semantic-memory to swarm-mail
+const result = await migrateLegacyMemories({
+  legacyDbPath: "~/.semantic-memory/db",
+  targetDb: swarmMailDb,
+  dryRun: false  // Set true to preview
+});
+
+console.log(`Migrated ${result.migrated} memories`);
+console.log(`Skipped ${result.skipped} (already exist)`);
+console.log(`Failed ${result.failed} (see errors)`);
+```
+
+### Deprecation Notice
+
+> ⚠️ **The standalone semantic-memory MCP server is deprecated.**
+>
+> Use the embedded memory in `opencode-swarm-plugin` instead:
+> - Single PGLite instance (no duplicate databases)
+> - No separate MCP server process
+> - Integrated with swarm coordination
+> - Same tool interface (`semantic-memory_*`)
+>
+> The standalone server will continue to work but won't receive updates.
+
+---
+
+## Database Schema
+
+### `memories` Table
+
+```sql
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,           -- e.g., "mem-abc123"
+  content TEXT NOT NULL,         -- The memory content
+  metadata JSONB DEFAULT '{}',   -- Tags, source, etc.
+  collection TEXT DEFAULT 'default',
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_memories_collection ON memories(collection);
+CREATE INDEX idx_memories_created ON memories(created_at DESC);
+```
+
+### `memory_embeddings` Table
+
+```sql
+CREATE TABLE memory_embeddings (
+  id SERIAL PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  embedding vector(1024) NOT NULL,  -- pgvector type
+  UNIQUE(memory_id)
+);
+
+CREATE INDEX idx_memory_embeddings_vector 
+  ON memory_embeddings USING ivfflat (embedding vector_cosine_ops);
+```
+
+### Full-Text Search Index
+
+```sql
+CREATE INDEX idx_memories_fts 
+  ON memories USING gin(to_tsvector('english', content));
+```
+
+---
+
+## Troubleshooting
+
+### "Failed to generate embedding"
+
+Ollama isn't running or model isn't available:
+
+```bash
+# Check Ollama status
+ollama list
+
+# Start Ollama if not running
+ollama serve
+
+# Pull model if missing
+ollama pull mxbai-embed-large
+```
+
+### Slow searches
+
+Vector search requires the IVFFlat index. If searches are slow:
+
+```sql
+-- Check index exists
+SELECT indexname FROM pg_indexes WHERE tablename = 'memory_embeddings';
+
+-- Rebuild if needed (run via swarm-mail migration)
+```
+
+### Memory not found after store
+
+Ensure you're using the same project path. Memory adapters are cached per project:
+
+```typescript
+// These use different databases!
+const adapter1 = await getMemoryAdapter("/project/a");
+const adapter2 = await getMemoryAdapter("/project/b");
+```
+
+---
+
+## Credits
+
+- **[Ollama](https://ollama.ai/)** - Local LLM inference for embeddings
+- **[pgvector](https://github.com/pgvector/pgvector)** - Vector similarity for Postgres
+- **[PGLite](https://pglite.dev/)** - Embedded Postgres in WASM
+- **[mxbai-embed-large](https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1)** - 1024-dim embedding model
+
+---
+
+```
+    🧠 ═══════════════════════════════════════════════════════ 🧠
+    ║                                                         ║
+    ║   "Those who cannot remember the past are condemned    ║
+    ║    to repeat it."  — George Santayana                  ║
+    ║                                                         ║
+    ║   Store your learnings. Search before solving.         ║
+    ║                                                         ║
+    🧠 ═══════════════════════════════════════════════════════ 🧠
+```

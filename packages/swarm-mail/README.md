@@ -47,6 +47,9 @@ Event sourcing primitives for multi-agent coordination. Local-first, no external
 │  ├── DurableCursor - Checkpointed stream reader            │
 │  └── DurableDeferred - Distributed promise                 │
 │                                                             │
+│  MEMORY                                                     │
+│  └── Semantic Memory - Vector embeddings (pgvector/Ollama) │
+│                                                             │
 │  STORAGE                                                    │
 │  └── PGLite (Embedded Postgres) + Migrations               │
 └─────────────────────────────────────────────────────────────┘
@@ -183,12 +186,46 @@ Materialized views derived from events:
 | `swarm_contexts`    | Checkpoint state for recovery      |
 | `eval_records`      | Outcome data for learning          |
 
+### Semantic Memory
+
+Persistent, searchable storage for agent learnings:
+
+```typescript
+import { createMemoryAdapter } from 'swarm-mail/memory'
+
+const swarmMail = await getSwarmMail('/my/project')
+const db = await swarmMail.getDatabase()
+const memory = await createMemoryAdapter(db)
+
+// Store a learning
+const { id } = await memory.store(
+  "OAuth refresh tokens need 5min buffer before expiry...",
+  { tags: "auth,tokens,debugging" }
+)
+
+// Search by meaning (vector similarity)
+const results = await memory.find("token refresh issues")
+
+// Check Ollama health
+const health = await memory.checkHealth()
+// { ollama: true, model: "mxbai-embed-large" }
+```
+
+> **Note:** Requires [Ollama](https://ollama.ai/) for vector embeddings. Falls back to full-text search if unavailable.
+>
+> ```bash
+> ollama pull mxbai-embed-large
+> ```
+
+> **Deprecation Notice:** The standalone [semantic-memory MCP server](https://github.com/joelhooks/semantic-memory) is deprecated. Use the embedded memory in swarm-mail instead - same API, single PGLite instance, no separate process.
+
 ## Architecture
 
 - **Append-only log** - Events are immutable, projections are derived
 - **Local-first** - PGLite embedded Postgres, no external servers
 - **Effect-TS** - Type-safe, composable, testable
 - **Exactly-once** - DurableCursor checkpoints position
+- **Semantic memory** - Vector embeddings with pgvector + Ollama
 
 ## API Reference
 
