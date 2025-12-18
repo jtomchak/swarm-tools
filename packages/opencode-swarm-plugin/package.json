@@ -26,7 +26,8 @@
     "test:all": "bun test --timeout 60000 src/",
     "test:watch": "bun test --watch src/",
     "typecheck": "tsc --noEmit",
-    "publish:pkg": "npm publish --access public --provenance"
+    "publish:pkg": "npm publish --access public --provenance",
+    "postinstall": "node -e \"console.log('\\n\\x1b[33m  Run \\x1b[36mswarm setup\\x1b[33m to configure OpenCode integration\\x1b[0m\\n')\""
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
@@ -65,6 +66,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/joelhooks/opencode-swarm-plugin"
+    "url": "https://github.com/joelhooks/swarm-tools"
   }
 }

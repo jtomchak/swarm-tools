@@ -1966,7 +1966,11 @@ async function version() {
   console.log(dim("  " + TAGLINE));
   console.log();
   console.log("  Version: " + VERSION);
-  console.log("  Docs:    https://github.com/joelhooks/opencode-swarm-plugin");
+  console.log("  Docs:    https://github.com/joelhooks/swarm-tools");
+  console.log();
+  console.log(cyan("  Get started:"));
+  console.log("    swarm setup    " + dim("Configure OpenCode integration"));
+  console.log("    swarm doctor   " + dim("Check dependencies"));
   console.log();
 
   // Check for updates (non-blocking)
