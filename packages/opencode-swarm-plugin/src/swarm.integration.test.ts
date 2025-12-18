@@ -1085,7 +1085,7 @@ describe("Tool Availability", () => {
 
   it("checks all tools at once", async () => {
     const availability = await checkAllTools();
-    expect(availability.size).toBe(6); // semantic-memory, cass, ubs, beads, swarm-mail, agent-mail
+    expect(availability.size).toBe(7); // semantic-memory, cass, ubs, hive, beads, swarm-mail, agent-mail
     expect(availability.has("semantic-memory")).toBe(true);
     expect(availability.has("cass")).toBe(true);
     expect(availability.has("ubs")).toBe(true);
@@ -1420,7 +1420,7 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
     it("enforces swarm_complete over manual hive_close", () => {
       // Step 9: Use swarm_complete, not hive_close
       expect(SUBTASK_PROMPT_V2).toContain("swarm_complete");
-      expect(SUBTASK_PROMPT_V2).toContain("DO NOT manually close the bead");
+      expect(SUBTASK_PROMPT_V2).toContain("DO NOT manually close the cell");
       expect(SUBTASK_PROMPT_V2).toContain("Use swarm_complete");
     });
   });
@@ -1580,6 +1580,92 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
         expect(parsed.bead_id).toBe("bd-nonexistent-12345");
         expect(parsed.recovery).toBeDefined();
         expect(parsed.recovery.steps).toBeInstanceOf(Array);
+      },
+    );
+
+    it.skipIf(!beadsAvailable)(
+      "returns specific error message when bead_id not found",
+      async () => {
+        // Try to complete with a non-existent bead ID
+        const result = await swarm_complete.execute(
+          {
+            project_key: "/tmp/test-bead-not-found",
+            agent_name: "test-agent",
+            bead_id: "bd-totally-fake-xyz123",
+            summary: "This should fail with specific error",
+            skip_verification: true,
+          },
+          mockContext,
+        );
+
+        const parsed = JSON.parse(result);
+
+        // Should return structured error with specific message
+        expect(parsed.success).toBe(false);
+        expect(parsed.error).toBeDefined();
+        // RED: This will fail - we currently get generic "Tool execution failed"
+        // We want the error message to specifically mention the bead was not found
+        expect(
+          parsed.error.toLowerCase().includes("bead not found") ||
+            parsed.error.toLowerCase().includes("not found"),
+        ).toBe(true);
+        expect(parsed.bead_id).toBe("bd-totally-fake-xyz123");
+      },
+    );
+
+    it.skipIf(!beadsAvailable)(
+      "returns specific error when project_key is invalid/mismatched",
+      async () => {
+        // Create a real bead first
+        const createResult =
+          await Bun.$`bd create "Test project mismatch" -t task --json`
+            .quiet()
+            .nothrow();
+
+        if (createResult.exitCode !== 0) {
+          console.warn(
+            "Could not create bead:",
+            createResult.stderr.toString(),
+          );
+          return;
+        }
+
+        const bead = JSON.parse(createResult.stdout.toString());
+
+        try {
+          // Try to complete with mismatched project_key
+          const result = await swarm_complete.execute(
+            {
+              project_key: "/totally/wrong/project/path",
+              agent_name: "test-agent",
+              bead_id: bead.id,
+              summary: "This should fail with project mismatch",
+              skip_verification: true,
+            },
+            mockContext,
+          );
+
+          const parsed = JSON.parse(result);
+
+          // Should return structured error with specific message about project mismatch
+          expect(parsed.success).toBe(false);
+          expect(parsed.error).toBeDefined();
+          // RED: This will fail - we want specific validation error
+          // Error should mention project mismatch or validation failure
+          const errorLower = parsed.error.toLowerCase();
+          expect(
+            (errorLower.includes("project") &&
+              (errorLower.includes("mismatch") ||
+                errorLower.includes("invalid") ||
+                errorLower.includes("not found"))) ||
+              errorLower.includes("validation"),
+          ).toBe(true);
+        } finally {
+          // Clean up
+          await Bun.$`bd close ${bead.id} --reason "Test cleanup"`
+            .quiet()
+            .nothrow();
+        }
       },
     );
 

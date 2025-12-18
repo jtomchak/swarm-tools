@@ -1152,11 +1152,36 @@ Or use skip_review=true to bypass (not recommended for production work).`,
     }
 
     try {
-      // Verify agent is registered in swarm-mail
-      // This catches agents who skipped swarmmail_init
+      // Validate bead_id exists and is not already closed (EARLY validation)
       const projectKey = args.project_key
         .replace(/\//g, "-")
         .replace(/\\/g, "-");
+
+      // Import HiveAdapter for validation
+      const { createHiveAdapter } = await import("swarm-mail");
+      const adapter = await createHiveAdapter({ projectPath: args.project_key });
+
+      // 1. Check if bead exists
+      const cell = await adapter.getCell(projectKey, args.bead_id);
+      if (!cell) {
+        return JSON.stringify({
+          success: false,
+          error: `Bead not found: ${args.bead_id}`,
+          hint: "Check the bead ID is correct. Use hive_query to list open cells.",
+        });
+      }
+
+      // 2. Check if bead is already closed
+      if (cell.status === "closed") {
+        return JSON.stringify({
+          success: false,
+          error: `Bead already closed: ${args.bead_id}`,
+          hint: "This bead was already completed. No action needed.",
+        });
+      }
+
+      // Verify agent is registered in swarm-mail
+      // This catches agents who skipped swarmmail_init
       let agentRegistered = false;
       let registrationWarning = "";
 
@@ -1645,12 +1670,13 @@ Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
       return JSON.stringify(
         {
           success: false,
-          error: errorMessage,
+          error: `swarm_complete failed: ${errorMessage}`,
           failed_step: failedStep,
           bead_id: args.bead_id,
           agent_name: args.agent_name,
           coordinator_notified: notificationSent,
           stack_trace: errorStack?.slice(0, 500),
+          hint: "Check the error message above. Common issues: bead not found, session not initialized.",
           context: {
             summary: args.summary,
             files_touched: args.files_touched || [],
