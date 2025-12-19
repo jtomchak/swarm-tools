@@ -1426,7 +1426,7 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
       expect(SUBTASK_PROMPT_V2).toContain("semantic-memory_find");
       expect(SUBTASK_PROMPT_V2).toContain("Query Past Learnings");
       expect(SUBTASK_PROMPT_V2).toContain("BEFORE starting work");
-      expect(SUBTASK_PROMPT_V2).toContain("Past learnings save time");
+      expect(SUBTASK_PROMPT_V2).toContain("If you skip this step, you WILL waste time solving already-solved problems");
     });
 
     it("contains survival checklist: skills discovery and loading", () => {
@@ -1465,9 +1465,9 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
     it("contains survival checklist: semantic-memory_store for learnings", () => {
       // Step 8: Store discoveries and learnings
       expect(SUBTASK_PROMPT_V2).toContain("semantic-memory_store");
-      expect(SUBTASK_PROMPT_V2).toContain("Store Learnings");
-      expect(SUBTASK_PROMPT_V2).toContain("Tricky bugs you solved");
-      expect(SUBTASK_PROMPT_V2).toContain("Store the WHY, not just the WHAT");
+      expect(SUBTASK_PROMPT_V2).toContain("STORE YOUR LEARNINGS");
+      expect(SUBTASK_PROMPT_V2).toContain("Solved a tricky bug");
+      expect(SUBTASK_PROMPT_V2).toContain("The WHY matters more than the WHAT");
     });
 
     it("does NOT mention coordinator reserving files", () => {
