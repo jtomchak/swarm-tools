@@ -370,6 +370,14 @@ Changesets doesn't support Bun workspaces out of the box - it doesn't resolve `w
 
 ### Release Flow
 
+The CI workflow uses a state machine with three states:
+
+1. **`has_changesets`** - Publishable changesets exist → creates version PR
+2. **`needs_publish`** - No changesets but local versions > npm → publishes to npm
+3. **`nothing`** - All packages up to date → skips everything
+
+**Normal flow:**
+
 1. Make changes to packages
 2. Create a changeset file:
    ```bash
@@ -382,9 +390,14 @@ Changesets doesn't support Bun workspaces out of the box - it doesn't resolve `w
    EOF
    ```
 3. Commit the changeset file with your changes
-4. Push to main
-5. Changesets action creates a "chore: release packages" PR with version bumps
-6. Merge that PR → action runs `ci:publish` → packages published to npm
+4. Push to main → CI detects `has_changesets` → creates "chore: release packages" PR
+5. Merge that PR → CI detects `needs_publish` → runs `ci:publish` → packages on npm
+
+**Edge cases handled:**
+
+- Only ignored packages have changesets → `nothing` state, no error
+- Version PR merged but publish failed → next push detects `needs_publish` and retries
+- No changes at all → `nothing` state, clean exit
 
 ### Changeset Lore (REQUIRED)
 
