@@ -31,19 +31,34 @@ jobs:
       - name: Build packages
         run: bun turbo build --filter='!@swarmtools/web'
 
-      # Changesets handles the logic:
-      # - If changesets exist: run ci:version, create/update release PR
-      # - If no changesets (release PR merged): run ci:publish
-      #
-      # ci:version = changeset version && bun update
-      #   - changeset version bumps package.json versions
-      #   - bun update syncs lockfile so workspace:* resolves correctly
-      #
-      # ci:publish = for each package: bun publish (resolves workspace:*)
-      #   - bun publish handles workspace:* resolution during pack
-      #   - || true continues if package already published
-      #   - changeset tag creates git tags after all packages published
+      # Check what changesets would do without actually doing it
+      - name: Check changesets status
+        id: status
+        run: |
+          # Run changeset status and capture output
+          STATUS=$(bunx changeset status --output=status.json 2>&1) || true
+          
+          if [ -f status.json ]; then
+            # Check if there are any releases (non-ignored packages)
+            RELEASES=$(cat status.json | jq '.releases | length')
+            if [ "$RELEASES" -gt 0 ]; then
+              echo "has_publishable=true" >> $GITHUB_OUTPUT
+              echo "📦 Found $RELEASES package(s) to release"
+              cat status.json | jq -r '.releases[] | "  - \(.name): \(.type)"'
+            else
+              echo "has_publishable=false" >> $GITHUB_OUTPUT
+              echo "📭 No publishable changesets (all ignored or none)"
+            fi
+            rm status.json
+          else
+            # No status file means no changesets at all
+            echo "has_publishable=false" >> $GITHUB_OUTPUT
+            echo "📭 No changesets found"
+          fi
+
       - name: Create Release Pull Request or Publish
+        if: steps.status.outputs.has_publishable == 'true'
+        id: changesets
         uses: changesets/action@v1
         with:
           version: bun run ci:version
@@ -52,3 +67,13 @@ jobs:
           commit: "chore: release packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.status.outputs.has_publishable }}" != "true" ]; then
+            echo "✅ Nothing to release"
+          elif [ "${{ steps.changesets.outputs.published }}" = "true" ]; then
+            echo "🚀 Published packages"
+          else
+            echo "📝 Release PR created/updated"
+          fi
