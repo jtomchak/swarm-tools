@@ -89,6 +89,79 @@ export const memoryMigration: Migration = {
 };
 
 /**
+ * Migration v9 (libSQL): Add memory tables
+ *
+ * LibSQL-compatible version using:
+ * - F32_BLOB for vector embeddings (instead of pgvector)
+ * - TEXT for metadata (instead of JSONB)
+ * - TEXT for timestamps (instead of TIMESTAMPTZ)
+ * - FTS5 virtual table (instead of PostgreSQL GIN index)
+ */
+export const memoryMigrationLibSQL: Migration = {
+  version: 9,
+  description: "Add semantic memory tables (memories with vector support, FTS5)",
+  up: `
+    -- ========================================================================
+    -- Memories Table
+    -- ========================================================================
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY NOT NULL,
+      content TEXT NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      collection TEXT DEFAULT 'default',
+      created_at TEXT DEFAULT (datetime('now')),
+      confidence REAL DEFAULT 0.7,
+      embedding F32_BLOB(1024)
+    );
+
+    -- Collection filtering index
+    CREATE INDEX IF NOT EXISTS idx_memories_collection ON memories(collection);
+
+    -- Vector embedding index for fast similarity search
+    CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories(libsql_vector_idx(embedding));
+
+    -- ========================================================================
+    -- FTS5 virtual table for full-text search
+    -- ========================================================================
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts 
+    USING fts5(id UNINDEXED, content, content=memories, content_rowid=rowid);
+
+    -- Triggers to keep FTS5 in sync
+    CREATE TRIGGER IF NOT EXISTS memories_fts_insert 
+    AFTER INSERT ON memories 
+    BEGIN
+      INSERT INTO memories_fts(rowid, id, content) 
+      VALUES (new.rowid, new.id, new.content);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memories_fts_update 
+    AFTER UPDATE ON memories 
+    BEGIN
+      UPDATE memories_fts 
+      SET content = new.content 
+      WHERE rowid = new.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memories_fts_delete 
+    AFTER DELETE ON memories 
+    BEGIN
+      DELETE FROM memories_fts WHERE rowid = old.rowid;
+    END;
+  `,
+  down: `
+    -- Drop in reverse order
+    DROP TRIGGER IF EXISTS memories_fts_delete;
+    DROP TRIGGER IF EXISTS memories_fts_update;
+    DROP TRIGGER IF EXISTS memories_fts_insert;
+    DROP TABLE IF EXISTS memories_fts;
+    DROP INDEX IF EXISTS idx_memories_embedding;
+    DROP INDEX IF EXISTS idx_memories_collection;
+    DROP TABLE IF EXISTS memories;
+  `,
+};
+
+/**
  * Export memory migrations array
  */
 export const memoryMigrations: Migration[] = [memoryMigration];
+export const memoryMigrationsLibSQL: Migration[] = [memoryMigrationLibSQL];

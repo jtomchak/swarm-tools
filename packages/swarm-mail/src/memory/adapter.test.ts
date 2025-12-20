@@ -14,38 +14,11 @@
  * 7. Test graceful degradation when Ollama is down
  */
 
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
+import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { randomBytes } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { DatabaseAdapter } from "../types/database.js";
+import { createDrizzleClient } from "../db/drizzle.js";
+import type { SwarmDb } from "../db/client.js";
 import { createMemoryAdapter, type MemoryConfig } from "./adapter.js";
-
-/**
- * Wrap PGlite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
-
-/**
- * Create a temporary database path for isolated testing
- */
-function makeTempDbPath(): string {
-  const testId = randomBytes(8).toString("hex");
-  const dbDir = join(tmpdir(), `test-adapter-${testId}`);
-  mkdirSync(dbDir, { recursive: true });
-  return dbDir;
-}
 
 /**
  * Generate a mock embedding vector (1024 dimensions)
@@ -56,6 +29,63 @@ function mockEmbedding(seed = 0): number[] {
     embedding.push(Math.sin(seed + i * 0.1) * 0.5 + 0.5);
   }
   return embedding;
+}
+
+/**
+ * Create in-memory libSQL database with memory schema
+ */
+async function createTestDb(): Promise<{ client: Client; db: SwarmDb }> {
+  const client = createClient({ url: ":memory:" });
+
+  // Create memories table with vector column (libSQL schema)
+  await client.execute(`
+    CREATE TABLE memories (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      collection TEXT DEFAULT 'default',
+      tags TEXT DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      decay_factor REAL DEFAULT 0.7,
+      embedding F32_BLOB(1024)
+    )
+  `);
+
+  // Create FTS5 virtual table for full-text search
+  await client.execute(`
+    CREATE VIRTUAL TABLE memories_fts USING fts5(
+      content,
+      content='memories',
+      content_rowid='rowid'
+    )
+  `);
+
+  // Create triggers to keep FTS in sync
+  await client.execute(`
+    CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END
+  `);
+  await client.execute(`
+    CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+    END
+  `);
+  await client.execute(`
+    CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END
+  `);
+
+  // Create vector index for similarity search
+  await client.execute(`
+    CREATE INDEX idx_memories_embedding ON memories(libsql_vector_idx(embedding))
+  `);
+
+  const db = createDrizzleClient(client);
+  return { client, db };
 }
 
 const mockConfig: MemoryConfig = {
@@ -76,52 +106,16 @@ const mockHealthResponse = (models: Array<{ name: string }>) =>
   } as Response);
 
 describe("MemoryAdapter - Store and Retrieve", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw_idx 
-      ON memory_embeddings 
-      USING hnsw (embedding vector_cosine_ops)
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memories_content_idx 
-      ON memories 
-      USING gin (to_tsvector('english', content))
-    `);
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_memories_collection ON memories(collection)`
-    );
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     // Mock successful Ollama responses
     const mockFetch = mock(() => mockSuccessResponse(mockEmbedding(1)));
@@ -132,8 +126,7 @@ describe("MemoryAdapter - Store and Retrieve", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("store() generates embedding and stores memory", async () => {
@@ -184,49 +177,16 @@ describe("MemoryAdapter - Store and Retrieve", () => {
 });
 
 describe("MemoryAdapter - Semantic Search", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw_idx 
-      ON memory_embeddings 
-      USING hnsw (embedding vector_cosine_ops)
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memories_content_idx 
-      ON memories 
-      USING gin (to_tsvector('english', content))
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     // Mock Ollama to return different embeddings for different texts
     const mockFetch = mock((url: string, options?: RequestInit) => {
@@ -252,8 +212,7 @@ describe("MemoryAdapter - Semantic Search", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("find() performs semantic search", async () => {
@@ -303,44 +262,16 @@ describe("MemoryAdapter - Semantic Search", () => {
 });
 
 describe("MemoryAdapter - FTS Fallback", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memories_content_idx 
-      ON memories 
-      USING gin (to_tsvector('english', content))
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     // Mock successful Ollama for initial storage
     const mockFetch = mock(() => mockSuccessResponse(mockEmbedding(1)));
@@ -356,8 +287,7 @@ describe("MemoryAdapter - FTS Fallback", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("find({ fts: true }) uses full-text search", async () => {
@@ -385,39 +315,16 @@ describe("MemoryAdapter - FTS Fallback", () => {
 });
 
 describe("MemoryAdapter - CRUD Operations", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     const mockFetch = mock(() => mockSuccessResponse(mockEmbedding(1)));
     global.fetch = mockFetch as typeof fetch;
@@ -427,8 +334,7 @@ describe("MemoryAdapter - CRUD Operations", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("remove() deletes a memory", async () => {
@@ -484,40 +390,23 @@ describe("MemoryAdapter - CRUD Operations", () => {
 });
 
 describe("MemoryAdapter - Health Check", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     adapter = createMemoryAdapter(db, mockConfig);
   });
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("checkHealth() returns true when Ollama is available", async () => {
@@ -554,44 +443,16 @@ describe("MemoryAdapter - Health Check", () => {
 });
 
 describe("MemoryAdapter - Decay Calculation", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw_idx 
-      ON memory_embeddings 
-      USING hnsw (embedding vector_cosine_ops)
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     const mockFetch = mock(() => mockSuccessResponse(mockEmbedding(1)));
     global.fetch = mockFetch as typeof fetch;
@@ -601,22 +462,17 @@ describe("MemoryAdapter - Decay Calculation", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("find() applies decay factor to scores", async () => {
     // Store an old memory by directly manipulating the database
     const oldDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // 90 days ago
-    await db.query(
-      "INSERT INTO memories (id, content, metadata, collection, created_at) VALUES ($1, $2, $3, $4, $5)",
-      ["old-mem", "Old memory content", "{}", "default", oldDate.toISOString()]
-    );
-    const vectorStr = `[${mockEmbedding(1).join(",")}]`;
-    await db.query(
-      "INSERT INTO memory_embeddings (memory_id, embedding) VALUES ($1, $2::vector)",
-      ["old-mem", vectorStr]
-    );
+    const vectorStr = JSON.stringify(mockEmbedding(1));
+    await client.execute({
+      sql: "INSERT INTO memories (id, content, metadata, collection, created_at, embedding) VALUES (?, ?, ?, ?, ?, vector(?))",
+      args: ["old-mem", "Old memory content", "{}", "default", oldDate.toISOString(), vectorStr]
+    });
 
     // Store a new memory
     await adapter.store("New memory content");
@@ -639,44 +495,16 @@ describe("MemoryAdapter - Decay Calculation", () => {
 });
 
 describe("MemoryAdapter - Confidence-Based Decay", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
+  let client: Client;
+  let db: SwarmDb;
   let adapter: ReturnType<typeof createMemoryAdapter>;
-  let dbPath: string;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize schema with confidence column
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw_idx 
-      ON memory_embeddings 
-      USING hnsw (embedding vector_cosine_ops)
-    `);
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     const mockFetch = mock(() => mockSuccessResponse(mockEmbedding(1)));
     global.fetch = mockFetch as typeof fetch;
@@ -686,8 +514,7 @@ describe("MemoryAdapter - Confidence-Based Decay", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("store() accepts confidence parameter", async () => {
@@ -698,65 +525,57 @@ describe("MemoryAdapter - Confidence-Based Decay", () => {
     expect(result.id).toBeDefined();
 
     // Verify confidence was stored
-    const row = await db.query<{ confidence: number }>(
-      "SELECT confidence FROM memories WHERE id = $1",
-      [result.id]
-    );
-    expect(row.rows[0].confidence).toBe(0.9);
+    const row = await client.execute({
+      sql: "SELECT decay_factor FROM memories WHERE id = ?",
+      args: [result.id]
+    });
+    expect(row.rows[0].decay_factor).toBe(0.9);
   });
 
   test("store() defaults confidence to 0.7", async () => {
     const result = await adapter.store("Default confidence memory");
 
-    const row = await db.query<{ confidence: number }>(
-      "SELECT confidence FROM memories WHERE id = $1",
-      [result.id]
-    );
-    expect(row.rows[0].confidence).toBe(0.7);
+    const row = await client.execute({
+      sql: "SELECT decay_factor FROM memories WHERE id = ?",
+      args: [result.id]
+    });
+    expect(row.rows[0].decay_factor).toBe(0.7);
   });
 
   test("store() clamps confidence to 0.0-1.0 range", async () => {
     // Test upper bound
     const high = await adapter.store("Too high", { confidence: 1.5 });
-    const highRow = await db.query<{ confidence: number }>(
-      "SELECT confidence FROM memories WHERE id = $1",
-      [high.id]
-    );
-    expect(highRow.rows[0].confidence).toBe(1.0);
+    const highRow = await client.execute({
+      sql: "SELECT decay_factor FROM memories WHERE id = ?",
+      args: [high.id]
+    });
+    expect(highRow.rows[0].decay_factor).toBe(1.0);
 
     // Test lower bound
     const low = await adapter.store("Too low", { confidence: -0.5 });
-    const lowRow = await db.query<{ confidence: number }>(
-      "SELECT confidence FROM memories WHERE id = $1",
-      [low.id]
-    );
-    expect(lowRow.rows[0].confidence).toBe(0.0);
+    const lowRow = await client.execute({
+      sql: "SELECT decay_factor FROM memories WHERE id = ?",
+      args: [low.id]
+    });
+    expect(lowRow.rows[0].decay_factor).toBe(0.0);
   });
 
   test("high confidence memory decays slower than low confidence", async () => {
     // Create two memories 90 days old with different confidence levels
     const oldDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // 90 days ago
-    const vectorStr = `[${mockEmbedding(1).join(",")}]`;
+    const vectorStr = JSON.stringify(mockEmbedding(1));
 
     // High confidence (1.0) = 180 day half-life
-    await db.query(
-      "INSERT INTO memories (id, content, metadata, collection, created_at, confidence) VALUES ($1, $2, $3, $4, $5, $6)",
-      ["high-conf", "High confidence content", "{}", "default", oldDate.toISOString(), 1.0]
-    );
-    await db.query(
-      "INSERT INTO memory_embeddings (memory_id, embedding) VALUES ($1, $2::vector)",
-      ["high-conf", vectorStr]
-    );
+    await client.execute({
+      sql: "INSERT INTO memories (id, content, metadata, collection, created_at, decay_factor, embedding) VALUES (?, ?, ?, ?, ?, ?, vector(?))",
+      args: ["high-conf", "High confidence content", "{}", "default", oldDate.toISOString(), 1.0, vectorStr]
+    });
 
     // Low confidence (0.3) = 72 day half-life (0.5 + 0.3 = 0.8, 90 * 0.8 = 72)
-    await db.query(
-      "INSERT INTO memories (id, content, metadata, collection, created_at, confidence) VALUES ($1, $2, $3, $4, $5, $6)",
-      ["low-conf", "Low confidence content", "{}", "default", oldDate.toISOString(), 0.3]
-    );
-    await db.query(
-      "INSERT INTO memory_embeddings (memory_id, embedding) VALUES ($1, $2::vector)",
-      ["low-conf", vectorStr]
-    );
+    await client.execute({
+      sql: "INSERT INTO memories (id, content, metadata, collection, created_at, decay_factor, embedding) VALUES (?, ?, ?, ?, ?, ?, vector(?))",
+      args: ["low-conf", "Low confidence content", "{}", "default", oldDate.toISOString(), 0.3, vectorStr]
+    });
 
     const results = await adapter.find("confidence content");
 
@@ -793,20 +612,16 @@ describe("MemoryAdapter - Confidence-Based Decay", () => {
     // confidence 0.5 -> halfLife = 90 * 1.0 = 90 days
     // confidence 0.0 -> halfLife = 90 * 0.5 = 45 days
 
-    const vectorStr = `[${mockEmbedding(1).join(",")}]`;
+    const vectorStr = JSON.stringify(mockEmbedding(1));
 
     // Create memories at exactly 90 days old with different confidence
     const oldDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
     // confidence 0.5 -> 90 day half-life -> at 90 days = 50% decay
-    await db.query(
-      "INSERT INTO memories (id, content, metadata, collection, created_at, confidence) VALUES ($1, $2, $3, $4, $5, $6)",
-      ["mid-conf", "Mid confidence", "{}", "default", oldDate.toISOString(), 0.5]
-    );
-    await db.query(
-      "INSERT INTO memory_embeddings (memory_id, embedding) VALUES ($1, $2::vector)",
-      ["mid-conf", vectorStr]
-    );
+    await client.execute({
+      sql: "INSERT INTO memories (id, content, metadata, collection, created_at, decay_factor, embedding) VALUES (?, ?, ?, ?, ?, ?, vector(?))",
+      args: ["mid-conf", "Mid confidence", "{}", "default", oldDate.toISOString(), 0.5, vectorStr]
+    });
 
     const results = await adapter.find("Mid confidence");
     const midResult = results.find((r) => r.memory.id === "mid-conf");

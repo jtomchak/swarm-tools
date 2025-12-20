@@ -4,10 +4,8 @@
  * @module beads/queries.test
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { wrapPGlite } from "../pglite.js";
+import { describe, test, expect, beforeEach } from "bun:test";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import { createHiveAdapter } from "./adapter.js";
 import type { DatabaseAdapter } from "../types/database.js";
 import type { HiveAdapter } from "../types/hive-adapter.js";
@@ -23,40 +21,15 @@ import {
 describe("beads/queries", () => {
   let db: DatabaseAdapter;
   let beads: HiveAdapter;
-  let pglite: PGlite;
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    // Create in-memory PGlite instance
-    pglite = await PGlite.create({ extensions: { vector } });
-   db = wrapPGlite(pglite);
-
-    // Initialize core schema (creates events table)
-    await pglite.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        type TEXT NOT NULL,
-        project_key TEXT NOT NULL,
-        timestamp BIGINT NOT NULL,
-        sequence SERIAL,
-        data JSONB NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_events_project_key ON events(project_key);
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-    `);
-
-    // Run swarm-mail migrations
-    const { runMigrations } = await import("../streams/migrations.js");
-    await runMigrations(pglite);
-
-    // Create beads adapter and run beads migrations
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
+    
+    // Create beads adapter (no migrations needed - schema already set up)
     beads = createHiveAdapter(db, projectKey);
-    await beads.runMigrations();
-  });
-
-  afterEach(async () => {
-    await pglite.close();
   });
 
   describe("getReadyWork", () => {
@@ -520,9 +493,10 @@ describe("beads/queries", () => {
       await beads.changeCellStatus(projectKey, inProgressOld.id, "in_progress");
 
       // Make both old
+      const oldTimestamp = Date.now() - 10 * 24 * 60 * 60 * 1000;
       await db.query(
-        `UPDATE beads SET updated_at = $1 WHERE id = ANY($2)`,
-        [Date.now() - 10 * 24 * 60 * 60 * 1000, [openOld.id, inProgressOld.id]]
+        `UPDATE beads SET updated_at = $1 WHERE id IN ($2, $3)`,
+        [oldTimestamp, openOld.id, inProgressOld.id]
       );
 
       const stale = await getStaleIssues(beads, projectKey, 7, {
@@ -538,9 +512,10 @@ describe("beads/queries", () => {
       const old2 = await beads.createCell(projectKey, { title: "Old 2", type: "task", priority: 2 });
       const old3 = await beads.createCell(projectKey, { title: "Old 3", type: "task", priority: 2 });
 
+      const oldTimestamp = Date.now() - 10 * 24 * 60 * 60 * 1000;
       await db.query(
-        `UPDATE beads SET updated_at = $1 WHERE id = ANY($2)`,
-        [Date.now() - 10 * 24 * 60 * 60 * 1000, [old1.id, old2.id, old3.id]]
+        `UPDATE beads SET updated_at = $1 WHERE id IN ($2, $3, $4)`,
+        [oldTimestamp, old1.id, old2.id, old3.id]
       );
 
       const stale = await getStaleIssues(beads, projectKey, 7, { limit: 2 });

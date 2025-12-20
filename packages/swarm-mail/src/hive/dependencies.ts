@@ -36,7 +36,8 @@ export async function wouldCreateCycle(
   cellId: string,
   dependsOnId: string,
 ): Promise<boolean> {
-  const result = await db.query<{ exists: boolean }>(
+  // SQLite-compatible: use COUNT instead of EXISTS which returns boolean
+  const result = await db.query<{ cycle_exists: number }>(
     `WITH RECURSIVE paths AS (
        -- Start from the target (what we want to depend on)
        SELECT
@@ -57,13 +58,11 @@ export async function wouldCreateCycle(
        JOIN paths p ON bd.cell_id = p.depends_on_id
        WHERE p.depth < $3
      )
-     SELECT EXISTS(
-       SELECT 1 FROM paths WHERE depends_on_id = $1
-     ) as exists`,
+     SELECT COUNT(*) as cycle_exists FROM paths WHERE depends_on_id = $1 LIMIT 1`,
     [cellId, dependsOnId, MAX_DEPENDENCY_DEPTH],
   );
 
-  return result.rows[0]?.exists ?? false;
+  return (result.rows[0]?.cycle_exists ?? 0) > 0;
 }
 
 /**
@@ -117,12 +116,14 @@ export async function rebuildBeadBlockedCache(
 
   if (blockerIds.length > 0) {
     // Has open blockers - insert or update cache
+    // SQLite: serialize array as JSON string
+    const blockerIdsJson = JSON.stringify(blockerIds);
     await db.query(
       `INSERT INTO blocked_beads_cache (cell_id, blocker_ids, updated_at)
        VALUES ($1, $2, $3)
        ON CONFLICT (cell_id) 
        DO UPDATE SET blocker_ids = $2, updated_at = $3`,
-      [cellId, blockerIds, Date.now()],
+      [cellId, blockerIdsJson, Date.now()],
     );
   } else {
     // No open blockers - remove from cache

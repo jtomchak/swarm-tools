@@ -1,13 +1,13 @@
 /**
  * Beads Schema Migration (v7-v8)
  *
- * Adds beads-specific tables to the shared PGLite database.
+ * Adds beads-specific tables to the shared libSQL database.
  * This migration extends the existing swarm-mail schema.
  *
  * ## Migration Strategy
  * - Migration v7 adds beads tables to existing swarm-mail schema (v0-v6)
  * - Migration v8 adds cells view for beads→hive rename compatibility
- * - Shares same PGLite database instance and migration system
+ * - Shares same libSQL database instance and migration system
  * - Uses same schema_version table for tracking
  *
  * ## Tables Created
@@ -246,11 +246,89 @@ export const cellsViewMigration: Migration = {
 };
 
 /**
+ * LibSQL-compatible cells view migration (v8)
+ * 
+ * SQLite doesn't support CREATE OR REPLACE or stored procedures.
+ * Use DROP IF EXISTS + CREATE and inline INSTEAD OF triggers.
+ */
+export const cellsViewMigrationLibSQL: Migration = {
+  version: 8,
+  description: "Add cells view for beads→hive rename compatibility (LibSQL)",
+  up: `
+    -- ========================================================================
+    -- Cells View (alias for beads table) - LibSQL version
+    -- ========================================================================
+    DROP VIEW IF EXISTS cells;
+    CREATE VIEW cells AS SELECT * FROM beads;
+
+    -- INSTEAD OF INSERT trigger (inline, no stored procedure)
+    DROP TRIGGER IF EXISTS cells_insert;
+    CREATE TRIGGER cells_insert
+      INSTEAD OF INSERT ON cells
+      FOR EACH ROW
+    BEGIN
+      INSERT INTO beads VALUES (
+        NEW.id, NEW.project_key, NEW.type, NEW.status, NEW.title,
+        NEW.description, NEW.priority, NEW.parent_id, NEW.assignee,
+        NEW.created_at, NEW.updated_at, NEW.closed_at, NEW.closed_reason,
+        NEW.deleted_at, NEW.deleted_by, NEW.delete_reason, NEW.created_by
+      );
+    END;
+
+    -- INSTEAD OF UPDATE trigger
+    DROP TRIGGER IF EXISTS cells_update;
+    CREATE TRIGGER cells_update
+      INSTEAD OF UPDATE ON cells
+      FOR EACH ROW
+    BEGIN
+      UPDATE beads SET
+        project_key = NEW.project_key,
+        type = NEW.type,
+        status = NEW.status,
+        title = NEW.title,
+        description = NEW.description,
+        priority = NEW.priority,
+        parent_id = NEW.parent_id,
+        assignee = NEW.assignee,
+        created_at = NEW.created_at,
+        updated_at = NEW.updated_at,
+        closed_at = NEW.closed_at,
+        closed_reason = NEW.closed_reason,
+        deleted_at = NEW.deleted_at,
+        deleted_by = NEW.deleted_by,
+        delete_reason = NEW.delete_reason,
+        created_by = NEW.created_by
+      WHERE id = OLD.id;
+    END;
+
+    -- INSTEAD OF DELETE trigger
+    DROP TRIGGER IF EXISTS cells_delete;
+    CREATE TRIGGER cells_delete
+      INSTEAD OF DELETE ON cells
+      FOR EACH ROW
+    BEGIN
+      DELETE FROM beads WHERE id = OLD.id;
+    END;
+  `,
+  down: `
+    DROP TRIGGER IF EXISTS cells_delete;
+    DROP TRIGGER IF EXISTS cells_update;
+    DROP TRIGGER IF EXISTS cells_insert;
+    DROP VIEW IF EXISTS cells;
+  `,
+};
+
+/**
  * Export individual migrations
  */
 export const beadsMigrations: Migration[] = [beadsMigration];
 
 /**
- * All hive migrations in order
+ * All hive migrations in order (PGLite version)
  */
 export const hiveMigrations: Migration[] = [beadsMigration, cellsViewMigration];
+
+/**
+ * All hive migrations in order (LibSQL version)
+ */
+export const hiveMigrationsLibSQL: Migration[] = [beadsMigration, cellsViewMigrationLibSQL];

@@ -141,7 +141,7 @@ export async function getBlockedIssues(
 ): Promise<BlockedCell[]> {
   const db = await adapter.getDatabase();
 
-  const result = await db.query<Cell & { blocker_ids: string[] }>(
+  const result = await db.query<Cell & { blocker_ids: string }>(
     `SELECT b.*, bbc.blocker_ids 
      FROM beads b
      JOIN blocked_beads_cache bbc ON b.id = bbc.cell_id
@@ -154,7 +154,8 @@ export async function getBlockedIssues(
     const { blocker_ids, ...cellData } = r;
     return {
       cell: cellData as Cell,
-      blockers: blocker_ids,
+      // blocker_ids is stored as JSON string in libSQL
+      blockers: JSON.parse(blocker_ids) as string[],
     };
   });
 }

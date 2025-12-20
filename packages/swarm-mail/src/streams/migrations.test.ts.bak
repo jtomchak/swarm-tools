@@ -1,30 +1,21 @@
 /**
  * Tests for Schema Migration System
  *
- * **PORTED TO LIBSQL** ✅ - Infrastructure complete, most tests skipped pending libSQL migrations
+ * **IMPORTANT**: This test file has been ported to use libSQL test infrastructure,
+ * but the migrations in migrations.ts contain PostgreSQL-specific SQL (SERIAL, JSONB,
+ * TIMESTAMPTZ, etc.) which is incompatible with libSQL/SQLite.
  *
- * This test file uses libSQL test infrastructure (createClient, DatabaseAdapter wrapper,
- * sqlite_master queries). Most tests are currently SKIPPED because migrations.ts contains
- * PostgreSQL-specific SQL (SERIAL, JSONB, TIMESTAMPTZ) that fails in SQLite.
+ * **Current State**:
+ * - Test infrastructure uses libSQL (DatabaseAdapter wrapper, sqlite_master queries)
+ * - Migration SQL is still PostgreSQL-specific
+ * - Tests will FAIL until libSQL-compatible migrations are created
  *
- * **What works**:
- * - ✅ DatabaseAdapter interface with libSQL
- * - ✅ getCurrentVersion() with SQLite
- * - ✅ Test infrastructure ready for libSQL migrations
+ * **TODO**: Create libSQL-compatible migrations (similar to hiveMigrationsLibSQL) to enable
+ * full test coverage.
  *
- * **What's skipped** (PostgreSQL SQL incompatibility):
- * - ❌ runMigrations() tests
- * - ❌ rollbackTo() tests
- * - ❌ Schema creation tests
- *
- * **Next steps** (future work):
- * 1. Create libSQL-compatible migrations (like `hiveMigrationsLibSQL`)
- * 2. Un-skip tests
- * 3. Full migration coverage with libSQL
- *
- * **Current test coverage**:
- * - Schema: libsql-schema.test.ts (libSQL-native, PASSES)
- * - Migrations: migrations.ts with PGlite in production (PostgreSQL)
+ * **Alternatives**:
+ * - Real schema is tested in libsql-schema.test.ts
+ * - PostgreSQL migrations work with PGlite in production (streams/index.ts)
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { createClient } from "@libsql/client";
@@ -93,7 +84,7 @@ describe("Schema Migrations", () => {
       expect(result.current).toBe(9);
     });
 
-    it.skip("should create cursors table with correct schema", async () => {
+    it("should create cursors table with correct schema", async () => {
       await runMigrations(db);
 
       // Verify table exists (SQLite uses sqlite_master)
@@ -120,7 +111,7 @@ describe("Schema Migrations", () => {
       expect(indexesResult.rows.length).toBeGreaterThan(0);
     });
 
-    it.skip("should create deferred table with correct schema", async () => {
+    it("should create deferred table with correct schema", async () => {
       await runMigrations(db);
 
       const tableResult = await db.query<{ name: string }>(
@@ -143,7 +134,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Idempotency", () => {
-    it.skip("should be safe to run migrations multiple times", async () => {
+    it("should be safe to run migrations multiple times", async () => {
       // First run
       const result1 = await runMigrations(db);
       expect(result1.applied).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -160,7 +151,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Incremental Upgrade", () => {
-    it.skip("should apply only new migrations", async () => {
+    it("should apply only new migrations", async () => {
       // Manually apply migrations 0 and 1 (core tables + cursors)
       await db.exec(migrations[0]!.up); // version 0: core event store tables
       await db.exec(migrations[1]!.up); // version 1: cursors table
@@ -190,7 +181,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Rollback", () => {
-    it.skip("should rollback to target version", async () => {
+    it("should rollback to target version", async () => {
       // Apply all migrations
       await runMigrations(db);
       expect(await getCurrentVersion(db)).toBe(9);
@@ -217,7 +208,7 @@ describe("Schema Migrations", () => {
       expect(deferredExists.rows.length).toBe(0);
     });
 
-    it.skip("should rollback to version 0", async () => {
+    it("should rollback to version 0", async () => {
       await runMigrations(db);
 
       const result = await rollbackTo(db, 0);
@@ -231,7 +222,7 @@ describe("Schema Migrations", () => {
       expect(cursorsExists.rows.length).toBe(0);
     });
 
-    it.skip("should do nothing if target version >= current", async () => {
+    it("should do nothing if target version >= current", async () => {
       await runMigrations(db);
 
       const result = await rollbackTo(db, 9);
@@ -241,7 +232,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Migration Status", () => {
-    it.skip("should check if migration is applied", async () => {
+    it("should check if migration is applied", async () => {
       expect(await isMigrationApplied(db, 1)).toBe(false);
 
       await runMigrations(db);
@@ -257,7 +248,7 @@ describe("Schema Migrations", () => {
       expect(await isMigrationApplied(db, 9)).toBe(true);
     });
 
-    it.skip("should list pending migrations", async () => {
+    it("should list pending migrations", async () => {
       const pending1 = await getPendingMigrations(db);
       expect(pending1).toHaveLength(10);
       expect(pending1.map((m) => m.version)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -292,7 +283,7 @@ describe("Schema Migrations", () => {
       expect(pending2.map((m) => m.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     });
 
-    it.skip("should list applied migrations", async () => {
+    it("should list applied migrations", async () => {
       const applied1 = await getAppliedMigrations(db);
       expect(applied1).toHaveLength(0);
 
@@ -308,7 +299,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Data Persistence", () => {
-    it.skip("should preserve data across migrations", async () => {
+    it("should preserve data across migrations", async () => {
       // Apply migrations 0 and 1 (core tables + cursors)
       await db.exec(migrations[0]!.up); // version 0: core event store tables
       await db.exec(migrations[1]!.up); // version 1: cursors table
@@ -350,7 +341,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Error Handling", () => {
-    it.skip("should rollback failed migrations", async () => {
+    it("should rollback failed migrations", async () => {
       // Apply migrations 0 and 1 first
       const migration0 = migrations[0];
       const migration1 = migrations[1];
@@ -394,7 +385,7 @@ describe("Schema Migrations", () => {
   });
 
   describe("Schema Version Table", () => {
-    it.skip("should record migration metadata", async () => {
+    it("should record migration metadata", async () => {
       await runMigrations(db);
 
       const result = await db.query<{

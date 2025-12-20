@@ -110,7 +110,17 @@ export async function appendCellEvent(
   if (!row) {
     throw new Error("[BeadsStore] Failed to insert event - no row returned");
   }
-  const { id, sequence } = row;
+  let { id, sequence } = row;
+  
+  // LibSQL workaround: RETURNING gives pre-trigger value, sequence may be null
+  // If sequence is null, fetch it after trigger has run
+  if (sequence == null) {
+    const seqResult = await db.query<{ sequence: number }>(
+      `SELECT sequence FROM events WHERE id = $1`,
+      [id],
+    );
+    sequence = seqResult.rows[0]?.sequence ?? id; // Fallback to id if still null
+  }
 
   // Update materialized views based on event type
   // Cast to any to match projections' loose event type (with index signature)
@@ -156,8 +166,10 @@ export async function readCellEvents(
     }
 
     if (options.types && options.types.length > 0) {
-      conditions.push(`type = ANY($${paramIndex++})`);
-      params.push(options.types);
+      // SQLite uses IN instead of ANY
+      const placeholders = options.types.map(() => `$${paramIndex++}`).join(", ");
+      conditions.push(`type IN (${placeholders})`);
+      params.push(...options.types);
     }
 
     if (options.since !== undefined) {

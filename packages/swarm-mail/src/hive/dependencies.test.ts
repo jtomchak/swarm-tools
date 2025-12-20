@@ -10,50 +10,24 @@
  * Reference: steveyegge/beads/internal/storage/sqlite/dependencies_test.go
  */
 
-import { describe, test, expect, beforeEach } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { createHiveAdapter } from "./adapter.js";
-import type { HiveAdapter } from "../types/hive-adapter.js";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import type { DatabaseAdapter } from "../types/database.js";
-
-/**
- * Wrap PGlite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
+import type { HiveAdapter } from "../types/hive-adapter.js";
+import { createHiveAdapter } from "./adapter.js";
 
 describe("Dependencies", () => {
-  let db: ReturnType<typeof wrapPGlite>;
+  let db: DatabaseAdapter;
   let beads: HiveAdapter;
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    const pglite = await PGlite.create({ extensions: { vector } });
-    db = wrapPGlite(pglite);
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
     
-    // Create minimal events table (required by beads event store)
-    await pglite.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        type TEXT NOT NULL,
-        project_key TEXT NOT NULL,
-        sequence SERIAL,
-        timestamp BIGINT NOT NULL,
-        data JSONB NOT NULL
-      );
-    `);
-    
-    // Create beads adapter and run migrations
+    // Create beads adapter (no migrations needed - schema already set up)
     beads = createHiveAdapter(db, projectKey);
-    await beads.runMigrations();
   });
 
   describe("addDependency", () => {

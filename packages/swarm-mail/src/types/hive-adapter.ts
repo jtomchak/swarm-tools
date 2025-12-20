@@ -5,7 +5,7 @@
  * comments, epic management) to enable different storage backends.
  *
  * ## Design Goals
- * - Database-agnostic (works with PGLite, SQLite, PostgreSQL, etc.)
+ * - Database-agnostic (works with libSQL, SQLite, PostgreSQL, etc.)
  * - Parallel to SwarmMailAdapter pattern
  * - Event sourcing with projections for queries
  * - No implementation details leak through interface
@@ -17,7 +17,7 @@
  *
  * ## Relationship to steveyegge/beads
  * This is a TypeScript rewrite of steveyegge/beads internal/storage/storage.go
- * interface, adapted for event sourcing and shared PGLite database.
+ * interface, adapted for event sourcing and shared libSQL database.
  */
 
 import type { DatabaseAdapter } from "./database.js";
@@ -560,7 +560,7 @@ export interface HiveSchemaAdapter {
   /**
    * Run beads-specific migrations
    * 
-   * Adds cells tables to shared PGLite database
+   * Adds cells tables to shared libSQL database
    */
   runMigrations(projectPath?: string): Promise<void>;
 
@@ -638,9 +638,9 @@ export interface HiveAdapter
  * 
  * @example
  * ```typescript
- * import { createPGLiteHiveAdapter } from '@opencode/swarm-mail/adapters/pglite-hive';
+ * import { createLibSQLHiveAdapter } from '@opencode/swarm-mail/adapters/libsql-hive';
  * 
- * const adapter = createPGLiteHiveAdapter({ path: './streams.db' });
+ * const adapter = createLibSQLHiveAdapter({ path: './streams.db' });
  * ```
  */
 export type HiveAdapterFactory = (config: {

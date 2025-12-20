@@ -1,5 +1,19 @@
 /**
  * Tests for Legacy Memory Migration
+ * 
+ * **KEPT ON PGLITE** - This file tests migration FROM legacy semantic-memory
+ * (which was PGLite-based) TO the current swarm-mail schema.
+ * 
+ * The migrate-legacy.ts tool assumes PostgreSQL schemas:
+ * - Source: memories + memory_embeddings tables (PGLite)
+ * - Target: memories + memory_embeddings tables (PGLite)
+ * - Uses `::vector` cast syntax (PostgreSQL-specific)
+ * 
+ * LibSQL uses a different schema (embedding column in memories table, no separate
+ * memory_embeddings table), so this migration path doesn't apply.
+ * 
+ * This is a one-time migration tool for users upgrading from standalone
+ * semantic-memory MCP server (which was PGLite) to swarm-mail (also PGLite).
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +41,7 @@ describe("Legacy Memory Migration", () => {
     legacyPath = mkdtempSync(join(tmpdir(), "legacy-memory-"));
     targetPath = mkdtempSync(join(tmpdir(), "target-memory-"));
 
-    // Create legacy database with old schema
+    // Create legacy database with old schema (PGLite - source of migration)
     legacyDb = await PGlite.create({
       dataDir: legacyPath,
       extensions: { vector },
@@ -52,7 +66,7 @@ describe("Legacy Memory Migration", () => {
       );
     `);
 
-    // Create target database with new schema
+    // Create target database with new schema (PGLite - migration destination)
     targetDb = await PGlite.create({
       dataDir: targetPath,
       extensions: { vector },

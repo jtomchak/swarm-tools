@@ -1,36 +1,15 @@
 /**
  * MemoryAdapter Integration Test
  *
- * Smoke test to verify the adapter works with real PGlite + mocked Ollama.
+ * Smoke test to verify the adapter works with libSQL + mocked Ollama.
  * Tests the happy path: store → find → get → validate → remove
  */
 
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
+import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { randomBytes } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createDrizzleClient } from "../db/drizzle.js";
+import type { SwarmDb } from "../db/client.js";
 import { createMemoryAdapter } from "./adapter.js";
-import type { DatabaseAdapter } from "../types/database.js";
-
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
-
-function makeTempDbPath(): string {
-  const testId = randomBytes(8).toString("hex");
-  const dbDir = join(tmpdir(), `test-integration-${testId}`);
-  mkdirSync(dbDir, { recursive: true });
-  return dbDir;
-}
 
 function mockEmbedding(seed = 0): number[] {
   const embedding: number[] = [];
@@ -40,52 +19,73 @@ function mockEmbedding(seed = 0): number[] {
   return embedding;
 }
 
+/**
+ * Create in-memory libSQL database with memory schema
+ */
+async function createTestDb(): Promise<{ client: Client; db: SwarmDb }> {
+  const client = createClient({ url: ":memory:" });
+
+  // Create memories table with vector column (libSQL schema)
+  await client.execute(`
+    CREATE TABLE memories (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      collection TEXT DEFAULT 'default',
+      tags TEXT DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      decay_factor REAL DEFAULT 0.7,
+      embedding F32_BLOB(1024)
+    )
+  `);
+
+  // Create FTS5 virtual table for full-text search
+  await client.execute(`
+    CREATE VIRTUAL TABLE memories_fts USING fts5(
+      content,
+      content='memories',
+      content_rowid='rowid'
+    )
+  `);
+
+  // Create triggers to keep FTS in sync
+  await client.execute(`
+    CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END
+  `);
+  await client.execute(`
+    CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+    END
+  `);
+  await client.execute(`
+    CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END
+  `);
+
+  // Create vector index for similarity search
+  await client.execute(`
+    CREATE INDEX idx_memories_embedding ON memories(libsql_vector_idx(embedding))
+  `);
+
+  const db = createDrizzleClient(client);
+  return { client, db };
+}
+
 describe("MemoryAdapter - Integration Smoke Test", () => {
-  let pglite: PGlite;
-  let db: DatabaseAdapter;
-  let dbPath: string;
+  let client: Client;
+  let db: SwarmDb;
   let originalFetch: typeof fetch;
 
   beforeEach(async () => {
     originalFetch = global.fetch;
-    dbPath = makeTempDbPath();
-    pglite = await PGlite.create({
-      dataDir: dbPath,
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Initialize full schema
-    await db.exec("CREATE EXTENSION IF NOT EXISTS vector;");
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata JSONB DEFAULT '{}',
-        collection TEXT DEFAULT 'default',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        confidence REAL DEFAULT 0.7
-      )
-    `);
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_embeddings (
-        memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-        embedding vector(1024) NOT NULL
-      )
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memory_embeddings_hnsw_idx 
-      ON memory_embeddings 
-      USING hnsw (embedding vector_cosine_ops)
-    `);
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS memories_content_idx 
-      ON memories 
-      USING gin (to_tsvector('english', content))
-    `);
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_memories_collection ON memories(collection)`
-    );
+    const testDb = await createTestDb();
+    client = testDb.client;
+    db = testDb.db;
 
     // Mock Ollama responses
     const mockFetch = mock((url: string, options?: RequestInit) => {
@@ -111,8 +111,7 @@ describe("MemoryAdapter - Integration Smoke Test", () => {
 
   afterEach(async () => {
     global.fetch = originalFetch;
-    await pglite.close();
-    rmSync(dbPath, { recursive: true, force: true });
+    client.close();
   });
 
   test("full lifecycle: store → find → get → validate → remove", async () => {

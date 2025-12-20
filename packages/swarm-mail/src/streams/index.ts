@@ -1,17 +1,17 @@
 /**
- * SwarmMail Event Store - PGLite-based event sourcing
+ * SwarmMail Event Store - libSQL-based event sourcing
  *
  * ## Thread Safety
  *
- * PGLite runs in-process as a single-threaded SQLite-compatible database.
+ * libSQL runs in-process as a single-threaded SQLite-compatible database.
  * While Node.js is single-threaded, async operations can interleave.
  *
  * **Concurrency Model:**
- * - Single PGLite instance per project (singleton pattern via LRU cache)
+ * - Single libSQL instance per project (singleton pattern via LRU cache)
  * - Transactions provide isolation for multi-statement operations
  * - appendEvents uses BEGIN/COMMIT for atomic event batches
  * - Concurrent reads are safe (no locks needed)
- * - Concurrent writes are serialized by PGLite internally
+ * - Concurrent writes are serialized by libSQL internally
  *
  * **Race Condition Mitigations:**
  * - File reservations use INSERT with conflict detection
@@ -26,7 +26,7 @@
  *
  * ## Database Setup
  *
- * Embedded PostgreSQL database for event sourcing.
+ * Embedded SQLite-compatible database for event sourcing.
  * No external server required - runs in-process.
  *
  * Database location: .opencode/streams.db (project-local)
@@ -206,7 +206,7 @@ function evictLRU(): void {
 }
 
 /**
- * Get or create a PGLite instance for the given path
+ * Get or create a libSQL instance for the given path
  *
  * If initialization fails, falls back to in-memory database and marks instance as degraded.
  *
@@ -248,7 +248,7 @@ export async function getDatabase(projectPath?: string): Promise<PGlite> {
  * Create and initialize a database instance
  *
  * Uses file-based locking to prevent multiple processes from initializing
- * PGLite simultaneously, which causes WASM corruption.
+ * the database simultaneously, which causes corruption.
  *
  * Separated from getDatabase for cleaner Promise-based caching logic
  */
@@ -263,7 +263,7 @@ async function createDatabaseInstance(dbPath: string): Promise<PGlite> {
 
   // Try to create new instance with cross-process locking
   try {
-    // Acquire exclusive lock to prevent concurrent PGLite initialization
+    // Acquire exclusive lock to prevent concurrent database initialization
     // This prevents WASM corruption when multiple swarm agents start simultaneously
     debugLog("Acquiring init lock", { dbPath });
     releaseLock = await acquireInitLock(dbPath);
@@ -320,7 +320,7 @@ async function createDatabaseInstance(dbPath: string): Promise<PGlite> {
     }
   } finally {
     // Always release the lock after initialization (success or failure)
-    // PGLite handles its own internal file locking for ongoing operations
+    // Database handles its own internal file locking for ongoing operations
     if (releaseLock) {
       debugLog("Releasing init lock");
       await releaseLock();

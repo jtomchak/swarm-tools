@@ -11,13 +11,10 @@
  * @module beads/jsonl.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { beadsMigration, hiveMigrations } from "./migrations.js";
+import { describe, it, expect, beforeEach } from "bun:test";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import { createHiveAdapter } from "./adapter.js";
 import type { HiveAdapter } from "../types/hive-adapter.js";
-import type { DatabaseAdapter } from "../types/database.js";
 import {
   exportToJSONL,
   exportDirtyBeads,
@@ -28,60 +25,13 @@ import {
   type CellExport,
 } from "./jsonl.js";
 
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
-
 describe("JSONL Export/Import", () => {
-  let pglite: PGlite;
   let adapter: HiveAdapter;
   const projectKey = "/test/jsonl";
 
   beforeEach(async () => {
-    pglite = await PGlite.create({ extensions: { vector } });
-    
-    // Initialize events table and schema_version
-    await pglite.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        sequence SERIAL NOT NULL,
-        type TEXT NOT NULL,
-        project_key TEXT NOT NULL,
-        timestamp BIGINT NOT NULL,
-        data JSONB NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_events_project_key ON events(project_key);
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-      CREATE TABLE IF NOT EXISTS schema_version (
-        version INTEGER PRIMARY KEY,
-        applied_at BIGINT NOT NULL,
-        description TEXT
-      );
-    `);
-
-    // Run ALL hive migrations (v6 beads + v7 cells view)
-    const db = wrapPGlite(pglite);
-    for (const migration of hiveMigrations) {
-      await pglite.exec("BEGIN");
-      await pglite.exec(migration.up);
-      await pglite.query(
-        `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)`,
-        [migration.version, Date.now(), migration.description],
-      );
-      await pglite.exec("COMMIT");
-    }
-
+    const { adapter: db } = await createTestLibSQLDb();
     adapter = createHiveAdapter(db, projectKey);
-  });
-
-  afterEach(async () => {
-    await pglite.close();
   });
 
   describe("serializeToJSONL", () => {

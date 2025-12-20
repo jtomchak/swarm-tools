@@ -5,7 +5,7 @@
  * reservations, locks) to enable different storage backends.
  *
  * ## Design Goals
- * - Database-agnostic (works with PGLite, SQLite, PostgreSQL, etc.)
+ * - Database-agnostic (works with libSQL, SQLite, PostgreSQL, etc.)
  * - Matches existing swarm-mail API surface
  * - No implementation details leak through interface
  *
@@ -411,10 +411,10 @@ export interface SwarmMailAdapter
  *
  * @example
  * ```typescript
- * import { createPGLiteAdapter } from '@opencode/swarm-mail/adapters/pglite';
+ * import { createLibSQLAdapter } from '@opencode/swarm-mail/adapters/libsql';
  * import { createSQLiteAdapter } from '@opencode/swarm-mail/adapters/sqlite';
  *
- * const adapter = createPGLiteAdapter({ path: './streams.db' });
+ * const adapter = createLibSQLAdapter({ path: './streams.db' });
  * const adapter2 = createSQLiteAdapter({ path: './streams.db' });
  * ```
  */

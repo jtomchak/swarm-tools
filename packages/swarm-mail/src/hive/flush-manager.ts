@@ -9,9 +9,10 @@
  * @module beads/flush-manager
  */
 
-import { writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import type { HiveAdapter } from "../types/hive-adapter.js";
-import { exportDirtyBeads } from "./jsonl.js";
+import { exportDirtyBeads, parseJSONL, serializeToJSONL, type CellExport } from "./jsonl.js";
 import { clearDirtyBead } from "./projections.js";
 
 export interface FlushManagerOptions {
@@ -86,7 +87,8 @@ export class FlushManager {
   /**
    * Force immediate flush
    *
-   * Exports all dirty beads to the output file.
+   * Exports all dirty beads to the output file, merging with existing content.
+   * Dirty cells overwrite existing cells with the same ID.
    */
   async flush(): Promise<FlushResult> {
     const startTime = Date.now();
@@ -110,7 +112,7 @@ export class FlushManager {
       }
 
       // Export dirty beads
-      const { jsonl, cellIds } = await exportDirtyBeads(
+      const { jsonl: dirtyJsonl, cellIds } = await exportDirtyBeads(
         this.adapter,
         this.projectKey
       );
@@ -123,9 +125,34 @@ export class FlushManager {
         };
       }
 
+      // Parse dirty cells
+      const dirtyCells = parseJSONL(dirtyJsonl);
+      const dirtyCellIds = new Set(dirtyCells.map((c) => c.id));
+
+      // Read existing file and merge
+      let existingCells: CellExport[] = [];
+      if (existsSync(this.outputPath)) {
+        try {
+          const existingContent = await readFile(this.outputPath, "utf-8");
+          existingCells = parseJSONL(existingContent);
+        } catch {
+          // File exists but can't be read/parsed - start fresh
+          existingCells = [];
+        }
+      }
+
+      // Merge: keep existing cells that aren't dirty, add all dirty cells
+      const mergedCells: CellExport[] = [
+        ...existingCells.filter((c) => !dirtyCellIds.has(c.id)),
+        ...dirtyCells,
+      ];
+
+      // Serialize merged result
+      const mergedJsonl = mergedCells.map((c) => serializeToJSONL(c)).join("");
+
       // Write to file
-      await writeFile(this.outputPath, jsonl, "utf-8");
-      const bytesWritten = Buffer.byteLength(jsonl, "utf-8");
+      await writeFile(this.outputPath, mergedJsonl, "utf-8");
+      const bytesWritten = Buffer.byteLength(mergedJsonl, "utf-8");
 
       // Clear dirty flags
       const db = await this.adapter.getDatabase();

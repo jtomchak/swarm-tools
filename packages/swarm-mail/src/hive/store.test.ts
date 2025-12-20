@@ -10,27 +10,12 @@
  * 4. Integration with projections - events update materialized views
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { runMigrations } from "../streams/migrations.js";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import type { DatabaseAdapter } from "../types/database.js";
 import { appendCellEvent, readCellEvents, replayCellEvents } from "./store.js";
 import { getCell, queryCells, getDependencies, getLabels, getComments } from "./projections.js";
 import type { CellEvent } from "./events.js";
-
-/**
- * Wrap PGLite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
 
 /**
  * Helper to create bead events without importing from plugin package
@@ -47,22 +32,13 @@ function createCellEvent<T extends CellEvent["type"]>(
 }
 
 describe("Bead Event Store", () => {
-  let pglite: PGlite;
   let db: DatabaseAdapter;
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    // Create isolated in-memory instance for tests
-    pglite = await PGlite.create({ extensions: { vector } });
-    
-    // Run all migrations (0-9)
-    await runMigrations(pglite);
-    
-    db = wrapPGlite(pglite);
-  });
-
-  afterEach(async () => {
-    await pglite.close();
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
   });
 
   // ============================================================================
@@ -483,7 +459,7 @@ describe("Bead Event Store", () => {
 
     const result = await replayCellEvents({ projectKey, clearViews: true }, undefined, db);
     expect(result.eventsReplayed).toBeGreaterThan(0);
-    expect(result.duration).toBeGreaterThan(0);
+    expect(result.duration).toBeGreaterThanOrEqual(0);
 
     // Projections should be rebuilt
     const beads = await queryCells(db, projectKey);

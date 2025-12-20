@@ -533,16 +533,19 @@ export function createHiveAdapter(
     // ============================================================================
 
     async runMigrations(projectPath?) {
-      const { hiveMigrations } = await import("./migrations.js");
+      // Detect database dialect by checking for SQLite/LibSQL-specific features
+      // LibSQL and SQLite use sqlite_master, PostgreSQL uses information_schema
+      let isLibSQL = false;
+      try {
+        await db.query("SELECT name FROM sqlite_master LIMIT 1");
+        isLibSQL = true;
+      } catch {
+        isLibSQL = false;
+      }
       
-      // Ensure schema_version table exists first
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS schema_version (
-          version INTEGER PRIMARY KEY,
-          applied_at BIGINT NOT NULL,
-          description TEXT
-        );
-      `);
+      // Import the correct migration set based on dialect
+      const { hiveMigrations, hiveMigrationsLibSQL } = await import("./migrations.js");
+      const migrations = isLibSQL ? hiveMigrationsLibSQL : hiveMigrations;
       
       // Get current schema version
       const versionResult = await db.query<{ version: number }>(
@@ -551,16 +554,27 @@ export function createHiveAdapter(
       const currentVersion = versionResult.rows[0]?.version ?? 0;
       
       // Apply pending migrations
-      for (const migration of hiveMigrations) {
+      for (const migration of migrations) {
         if (migration.version > currentVersion) {
           await db.exec("BEGIN");
           try {
             await db.exec(migration.up);
-            await db.query(
-              `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)
-               ON CONFLICT (version) DO NOTHING`,
-              [migration.version, Date.now(), migration.description],
-            );
+            
+            // Use dialect-appropriate INSERT syntax
+            if (isLibSQL) {
+              await db.query(
+                `INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)
+                 ON CONFLICT (version) DO NOTHING`,
+                [migration.version, Date.now(), migration.description],
+              );
+            } else {
+              await db.query(
+                `INSERT INTO schema_version (version, applied_at, description) VALUES ($1, $2, $3)
+                 ON CONFLICT (version) DO NOTHING`,
+                [migration.version, Date.now(), migration.description],
+              );
+            }
+            
             await db.exec("COMMIT");
           } catch (error) {
             await db.exec("ROLLBACK");

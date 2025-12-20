@@ -11,10 +11,8 @@
  * 5. Dirty tracking works
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { runMigrations } from "../streams/migrations.js";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import type { DatabaseAdapter } from "../types/database.js";
 import {
   getCell,
@@ -35,93 +33,68 @@ import {
 } from "./projections.js";
 import { rebuildBeadBlockedCache } from "./dependencies.js";
 
-/**
- * Wrap PGLite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
+
 
 describe("Beads Migrations", () => {
-  let pglite: PGlite;
   let db: DatabaseAdapter;
 
   beforeEach(async () => {
-    pglite = await PGlite.create({ extensions: { vector } });
-    db = wrapPGlite(pglite);
-
-    // Run all migrations (0-9, includes beads/hive migrations 7-8)
-    await runMigrations(pglite);
-  });
-
-  afterEach(async () => {
-    await pglite.close();
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
   });
 
   test("migration creates beads table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'beads'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='beads'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 
   test("migration creates bead_dependencies table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'bead_dependencies'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='bead_dependencies'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 
   test("migration creates bead_labels table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'bead_labels'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='bead_labels'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 
   test("migration creates bead_comments table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'bead_comments'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='bead_comments'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 
   test("migration creates blocked_beads_cache table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'blocked_beads_cache'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='blocked_beads_cache'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 
   test("migration creates dirty_beads table", async () => {
-    const result = await pglite.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_name = 'dirty_beads'`,
+    const result = await db.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='dirty_beads'`,
     );
     expect(result.rows).toHaveLength(1);
   });
 });
 
 describe("Beads Projections", () => {
-  let pglite: PGlite;
   let db: DatabaseAdapter;
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    pglite = await PGlite.create({ extensions: { vector } });
-    db = wrapPGlite(pglite);
-    
-    // Run all migrations (0-9)
-    await runMigrations(pglite);
-  });
-
-  afterEach(async () => {
-    await pglite.close();
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
   });
 
   describe("cell_created event", () => {

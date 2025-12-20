@@ -9,79 +9,83 @@
  * @module hive/migrations.test
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
+import { createClient } from "@libsql/client";
+import type { Client } from "@libsql/client";
+import { describe, expect, test, beforeEach } from "bun:test";
 import type { DatabaseAdapter } from "../types/database.js";
-import { beadsMigration, cellsViewMigration, hiveMigrations } from "./migrations.js";
+import { convertPlaceholders } from "../libsql.js";
+import { beadsMigration, cellsViewMigrationLibSQL, hiveMigrationsLibSQL } from "./migrations.js";
 
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
+function wrapLibSQL(client: Client): DatabaseAdapter {
   return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
+    query: async <T>(sql: string, params?: unknown[]) => {
+      const converted = convertPlaceholders(sql, params);
+      const result = await client.execute({
+        sql: converted.sql,
+        args: converted.params,
+      });
+      return { rows: result.rows as T[] };
     },
-    close: () => pglite.close(),
+    exec: async (sql: string) => {
+      const converted = convertPlaceholders(sql);
+      // LibSQL's execute() doesn't support multiple statements
+      // Use executeMultiple() which handles BEGIN...END blocks correctly
+      await client.executeMultiple(converted.sql);
+    },
+    close: () => client.close(),
   };
 }
 
 describe("Hive Migrations", () => {
-  let pglite: PGlite;
+  let client: Client;
   let db: DatabaseAdapter;
 
   beforeEach(async () => {
-    pglite = await PGlite.create({ extensions: { vector } });
-    db = wrapPGlite(pglite);
+    client = createClient({ url: ":memory:" });
+    db = wrapLibSQL(client);
 
-    // Create base schema (events table, schema_version)
-    await pglite.exec(`
+    // Create base schema (events table, schema_version) - minimal setup for migrations
+    await client.execute(`
       CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        sequence SERIAL NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sequence INTEGER,
         type TEXT NOT NULL,
         project_key TEXT NOT NULL,
-        timestamp BIGINT NOT NULL,
-        data JSONB NOT NULL
-      );
+        timestamp INTEGER NOT NULL,
+        data TEXT NOT NULL DEFAULT '{}'
+      )
+    `);
+    await client.execute(`
       CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY,
-        applied_at BIGINT NOT NULL,
+        applied_at INTEGER NOT NULL,
         description TEXT
-      );
+      )
     `);
-  });
-
-  afterEach(async () => {
-    await pglite.close();
   });
 
   describe("beadsMigration (v6)", () => {
     test("creates beads table with correct schema", async () => {
-      await pglite.exec(beadsMigration.up);
+      await db.exec(beadsMigration.up);
 
-      // Verify table exists
-      const result = await pglite.query<{ exists: boolean }>(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_name = 'beads'
-        )
+      // Verify table exists (SQLite uses sqlite_master instead of information_schema)
+      const result = await db.query<{ name: string }>(`
+        SELECT name FROM sqlite_master WHERE type='table' AND name='beads'
       `);
-      expect(result.rows[0].exists).toBe(true);
+      expect(result.rows.length).toBe(1);
+      expect(result.rows[0].name).toBe("beads");
     });
 
     test("creates all supporting tables", async () => {
-      await pglite.exec(beadsMigration.up);
+      await db.exec(beadsMigration.up);
 
       const tables = ["beads", "bead_dependencies", "bead_labels", "bead_comments", "blocked_beads_cache", "dirty_beads"];
 
       for (const table of tables) {
-        const result = await pglite.query<{ exists: boolean }>(`
-          SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_name = $1
-          )
-        `, [table]);
-        expect(result.rows[0].exists).toBe(true);
+        const result = await db.query<{ name: string }>(`
+          SELECT name FROM sqlite_master WHERE type='table' AND name = '${table}'
+        `);
+        expect(result.rows.length).toBe(1);
       }
     });
   });
@@ -89,33 +93,31 @@ describe("Hive Migrations", () => {
   describe("cellsViewMigration (v7)", () => {
     test("creates cells view pointing to beads table", async () => {
       // First apply v6
-      await pglite.exec(beadsMigration.up);
+      await db.exec(beadsMigration.up);
 
       // Then apply v7
-      await pglite.exec(cellsViewMigration.up);
+      await db.exec(cellsViewMigrationLibSQL.up);
 
-      // Verify view exists
-      const result = await pglite.query<{ exists: boolean }>(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.views 
-          WHERE table_name = 'cells'
-        )
+      // Verify view exists (SQLite uses sqlite_master for views too)
+      const result = await db.query<{ name: string }>(`
+        SELECT name FROM sqlite_master WHERE type='view' AND name='cells'
       `);
-      expect(result.rows[0].exists).toBe(true);
+      expect(result.rows.length).toBe(1);
+      expect(result.rows[0].name).toBe("cells");
     });
 
     test("cells view allows SELECT queries", async () => {
-      await pglite.exec(beadsMigration.up);
-      await pglite.exec(cellsViewMigration.up);
+      await db.exec(beadsMigration.up);
+      await db.exec(cellsViewMigrationLibSQL.up);
 
       // Insert into beads
-      await pglite.query(`
+      await db.query(`
         INSERT INTO beads (id, project_key, type, status, title, priority, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, ["bd-test", "/test", "task", "open", "Test task", 2, Date.now(), Date.now()]);
 
       // Query via cells view
-      const result = await pglite.query<{ id: string; title: string }>(`
+      const result = await db.query<{ id: string; title: string }>(`
         SELECT id, title FROM cells WHERE project_key = $1
       `, ["/test"]);
 
@@ -125,17 +127,17 @@ describe("Hive Migrations", () => {
     });
 
     test("cells view allows INSERT via INSTEAD OF trigger", async () => {
-      await pglite.exec(beadsMigration.up);
-      await pglite.exec(cellsViewMigration.up);
+      await db.exec(beadsMigration.up);
+      await db.exec(cellsViewMigrationLibSQL.up);
 
       // Insert via cells view
-      await pglite.query(`
+      await db.query(`
         INSERT INTO cells (id, project_key, type, status, title, priority, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, ["bd-via-view", "/test", "bug", "open", "Via view", 1, Date.now(), Date.now()]);
 
       // Verify it's in beads table
-      const result = await pglite.query<{ id: string }>(`
+      const result = await db.query<{ id: string }>(`
         SELECT id FROM beads WHERE id = $1
       `, ["bd-via-view"]);
 
@@ -146,26 +148,26 @@ describe("Hive Migrations", () => {
   describe("upgrade path", () => {
     test("existing v6 database can upgrade to v7", async () => {
       // Simulate existing v6 database with data
-      await pglite.exec(beadsMigration.up);
-      await pglite.query(`
+      await db.exec(beadsMigration.up);
+      await db.query(`
         INSERT INTO schema_version (version, applied_at, description)
         VALUES ($1, $2, $3)
       `, [6, Date.now(), beadsMigration.description]);
 
-      await pglite.query(`
+      await db.query(`
         INSERT INTO beads (id, project_key, type, status, title, priority, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, ["bd-existing", "/test", "task", "open", "Existing task", 2, Date.now(), Date.now()]);
 
       // Apply v7 migration
-      await pglite.exec(cellsViewMigration.up);
-      await pglite.query(`
+      await db.exec(cellsViewMigrationLibSQL.up);
+      await db.query(`
         INSERT INTO schema_version (version, applied_at, description)
         VALUES ($1, $2, $3)
-      `, [7, Date.now(), cellsViewMigration.description]);
+      `, [7, Date.now(), cellsViewMigrationLibSQL.description]);
 
       // Verify existing data accessible via cells view
-      const result = await pglite.query<{ id: string }>(`
+      const result = await db.query<{ id: string }>(`
         SELECT id FROM cells WHERE id = $1
       `, ["bd-existing"]);
 
@@ -174,41 +176,41 @@ describe("Hive Migrations", () => {
 
     test("fresh database gets both v6 and v7", async () => {
       // Apply all migrations
-      for (const migration of hiveMigrations) {
-        await pglite.exec(migration.up);
-        await pglite.query(`
+      for (const migration of hiveMigrationsLibSQL) {
+        await db.exec(migration.up);
+        await db.query(`
           INSERT INTO schema_version (version, applied_at, description)
           VALUES ($1, $2, $3)
         `, [migration.version, Date.now(), migration.description]);
       }
 
       // Verify both beads table and cells view exist
-      const beadsExists = await pglite.query<{ exists: boolean }>(`
-        SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'beads')
+      const beadsExists = await db.query<{ name: string }>(`
+        SELECT name FROM sqlite_master WHERE type='table' AND name='beads'
       `);
-      const cellsExists = await pglite.query<{ exists: boolean }>(`
-        SELECT EXISTS (SELECT FROM information_schema.views WHERE table_name = 'cells')
+      const cellsExists = await db.query<{ name: string }>(`
+        SELECT name FROM sqlite_master WHERE type='view' AND name='cells'
       `);
 
-      expect(beadsExists.rows[0].exists).toBe(true);
-      expect(cellsExists.rows[0].exists).toBe(true);
+      expect(beadsExists.rows.length).toBe(1);
+      expect(cellsExists.rows.length).toBe(1);
     });
   });
 
   describe("recovery scenarios", () => {
     test("handles missing cells view gracefully", async () => {
       // Database has v6 but somehow missing v7
-      await pglite.exec(beadsMigration.up);
+      await db.exec(beadsMigration.up);
 
       // Query cells should fail
       await expect(
-        pglite.query(`SELECT * FROM cells LIMIT 1`)
+        db.query(`SELECT * FROM cells LIMIT 1`)
       ).rejects.toThrow();
 
       // After applying v7, it should work
-      await pglite.exec(cellsViewMigration.up);
+      await db.exec(cellsViewMigrationLibSQL.up);
 
-      const result = await pglite.query(`SELECT * FROM cells LIMIT 1`);
+      const result = await db.query(`SELECT * FROM cells LIMIT 1`);
       expect(result.rows).toHaveLength(0); // Empty but works
     });
   });

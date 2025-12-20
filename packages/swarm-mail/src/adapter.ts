@@ -12,10 +12,10 @@
  *
  * ## Usage
  * ```typescript
- * import { createPGLiteAdapter } from '@opencode/swarm-mail/adapters/pglite';
+ * import { createLibSQLAdapter } from '@opencode/swarm-mail/adapters/libsql';
  * import { createSwarmMailAdapter } from '@opencode/swarm-mail';
  *
- * const dbAdapter = createPGLiteAdapter({ path: './streams.db' });
+ * const dbAdapter = createLibSQLAdapter({ path: './streams.db' });
  * const swarmMail = createSwarmMailAdapter(dbAdapter, '/path/to/project');
  *
  * // Use the adapter
@@ -236,13 +236,13 @@ export function createSwarmMailAdapter(
 
     async runMigrations(projectPath?) {
       // Import migrations module and pass db
-      // Note: migrations expects PGlite but DatabaseAdapter is compatible
+      // Note: migrations work with any DatabaseAdapter implementation
       const { runMigrations: runMigrationsImpl } =
         await import("./streams/migrations");
       await runMigrationsImpl(db as any);
       
       // Force checkpoint after migrations to prevent WAL bloat
-      // Critical for embedded PGLite - prevents 930 WAL file accumulation
+      // Critical for embedded databases - prevents 930 WAL file accumulation
       if (db.checkpoint) {
         await db.checkpoint();
       }

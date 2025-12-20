@@ -42,6 +42,18 @@ type CellEvent = {
   [key: string]: unknown;
 };
 
+/**
+ * Detect if database is libSQL (SQLite) vs PGlite (PostgreSQL)
+ */
+async function isLibSQL(db: DatabaseAdapter): Promise<boolean> {
+  try {
+    await db.query("SELECT name FROM sqlite_master LIMIT 1");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ============================================================================
 // Event Handler - Main entry point for updating projections
 // ============================================================================
@@ -349,6 +361,7 @@ export async function queryCells(
   projectKey: string,
   options: QueryCellsOptions = {},
 ): Promise<Cell[]> {
+  const isLibSQLDb = await isLibSQL(db);
   const conditions: string[] = ["project_key = $1"];
   const params: unknown[] = [projectKey];
   let paramIndex = 2;
@@ -359,14 +372,30 @@ export async function queryCells(
 
   if (options.status) {
     const statuses = Array.isArray(options.status) ? options.status : [options.status];
-    conditions.push(`status = ANY($${paramIndex++})`);
-    params.push(statuses);
+    if (isLibSQLDb) {
+      // SQLite uses IN with individual placeholders
+      const placeholders = statuses.map(() => `$${paramIndex++}`).join(", ");
+      conditions.push(`status IN (${placeholders})`);
+      params.push(...statuses);
+    } else {
+      // PostgreSQL uses ANY with array
+      conditions.push(`status = ANY($${paramIndex++})`);
+      params.push(statuses);
+    }
   }
 
   if (options.type) {
     const types = Array.isArray(options.type) ? options.type : [options.type];
-    conditions.push(`type = ANY($${paramIndex++})`);
-    params.push(types);
+    if (isLibSQLDb) {
+      // SQLite uses IN with individual placeholders
+      const placeholders = types.map(() => `$${paramIndex++}`).join(", ");
+      conditions.push(`type IN (${placeholders})`);
+      params.push(...types);
+    } else {
+      // PostgreSQL uses ANY with array
+      conditions.push(`type = ANY($${paramIndex++})`);
+      params.push(types);
+    }
   }
 
   if (options.parent_id) {
@@ -433,11 +462,12 @@ export async function isBlocked(
   projectKey: string,
   cellId: string,
 ): Promise<boolean> {
-  const result = await db.query<{ exists: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM blocked_beads_cache WHERE cell_id = $1) as exists`,
+  // SQLite-compatible: use COUNT instead of EXISTS which returns boolean
+  const result = await db.query<{ is_blocked: number }>(
+    `SELECT COUNT(*) as is_blocked FROM blocked_beads_cache WHERE cell_id = $1 LIMIT 1`,
     [cellId],
   );
-  return result.rows[0]?.exists ?? false;
+  return (result.rows[0]?.is_blocked ?? 0) > 0;
 }
 
 /**
@@ -448,11 +478,18 @@ export async function getBlockers(
   projectKey: string,
   cellId: string,
 ): Promise<string[]> {
-  const result = await db.query<{ blocker_ids: string[] }>(
+  const result = await db.query<{ blocker_ids: string }>(
     `SELECT blocker_ids FROM blocked_beads_cache WHERE cell_id = $1`,
     [cellId],
   );
-  return result.rows[0]?.blocker_ids ?? [];
+  // SQLite stores arrays as JSON strings - parse them
+  const blockerIdsJson = result.rows[0]?.blocker_ids;
+  if (!blockerIdsJson) return [];
+  try {
+    return JSON.parse(blockerIdsJson) as string[];
+  } catch {
+    return [];
+  }
 }
 
 /**

@@ -5,13 +5,11 @@
  * Following the same pattern as hive/jsonl.ts
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeEach, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import { wrapPGlite } from "../pglite.js";
-import { memoryMigrations } from "./migrations.js";
+import { createTestLibSQLDb } from "../test-libsql.js";
+import type { DatabaseAdapter } from "../types/database.js";
 import {
   exportMemories,
   importMemories,
@@ -29,27 +27,20 @@ const TEST_DIR = join(import.meta.dir, ".test-memory-sync");
 const HIVE_DIR = join(TEST_DIR, ".hive");
 
 describe("Memory Sync", () => {
-  let pglite: PGlite;
-  let db: ReturnType<typeof wrapPGlite>;
+  let db: DatabaseAdapter;
 
   beforeAll(async () => {
     // Create test directories
     mkdirSync(HIVE_DIR, { recursive: true });
+  });
 
-    // Create in-memory PGlite with vector extension
-    pglite = await PGlite.create({
-      extensions: { vector },
-    });
-    db = wrapPGlite(pglite);
-
-    // Run migrations using exec (supports multiple statements)
-    for (const migration of memoryMigrations) {
-      await pglite.exec(migration.up);
-    }
+  beforeEach(async () => {
+    // Create fresh in-memory database with full schema for each test
+    const { adapter } = await createTestLibSQLDb();
+    db = adapter;
   });
 
   afterAll(async () => {
-    await pglite.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
@@ -198,16 +189,12 @@ describe("Memory Sync", () => {
 
     test("does NOT include embeddings (too large)", async () => {
       // Insert memory with embedding
-      const embedding = new Array(1024).fill(0.1);
+      // In libSQL, embedding is stored as F32_BLOB in the memories table itself
+      const embedding = new Float32Array(1024).fill(0.1);
       await db.query(
-        `INSERT INTO memories (id, content, metadata, collection, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        ["mem-with-embed", "Memory with embedding", "{}", "default", new Date().toISOString()]
-      );
-      await db.query(
-        `INSERT INTO memory_embeddings (memory_id, embedding)
-         VALUES ($1, $2)`,
-        ["mem-with-embed", JSON.stringify(embedding)]
+        `INSERT INTO memories (id, content, metadata, collection, created_at, embedding)
+         VALUES ($1, $2, $3, $4, $5, vector($6))`,
+        ["mem-with-embed", "Memory with embedding", "{}", "default", new Date().toISOString(), JSON.stringify(Array.from(embedding))]
       );
 
       const result = await exportMemories(db);
@@ -323,14 +310,12 @@ describe("Memory Sync", () => {
 
       await importMemories(db, jsonl);
 
-      const dbResult = await db.query<{ metadata: Record<string, unknown> | string }>(
+      const dbResult = await db.query<{ metadata: string }>(
         "SELECT metadata FROM memories WHERE id = $1",
         ["mem-meta-import"]
       );
-      // PGlite returns JSONB as object, not string
-      const metadata = typeof dbResult.rows[0].metadata === "string"
-        ? JSON.parse(dbResult.rows[0].metadata)
-        : dbResult.rows[0].metadata;
+      // libSQL returns JSON as TEXT string - always parse
+      const metadata = JSON.parse(dbResult.rows[0].metadata);
 
       expect(metadata.tags).toContain("oauth");
       expect(metadata.tags).toContain("refresh");

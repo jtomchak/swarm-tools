@@ -158,8 +158,10 @@ export async function exportToJSONL(
   }
 
   if (options.cellIds && options.cellIds.length > 0) {
-    conditions.push(`id = ANY($${paramIndex++})`);
-    params.push(options.cellIds);
+    // SQLite uses IN instead of ANY
+    const placeholders = options.cellIds.map(() => `$${paramIndex++}`).join(", ");
+    conditions.push(`id IN (${placeholders})`);
+    params.push(...options.cellIds);
   }
 
   const query = `

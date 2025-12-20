@@ -6,9 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "bun:test";
-import { PGlite } from "@electric-sql/pglite";
-import { vector } from "@electric-sql/pglite/vector";
-import type { DatabaseAdapter } from "../types/database.js";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import { createHiveAdapter } from "./adapter.js";
 import {
   createCell,
@@ -21,50 +19,13 @@ import {
 } from "./operations.js";
 import type { HiveAdapter } from "../types/hive-adapter.js";
 
-/**
- * Wrap PGlite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
-
 describe("operations", () => {
   let adapter: HiveAdapter;
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    // In-memory database for testing
-    const pglite = await PGlite.create({ extensions: { vector } });
-    
-    // Initialize core tables (events and schema_version)
-    await pglite.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        type TEXT NOT NULL,
-        project_key TEXT NOT NULL,
-        timestamp BIGINT NOT NULL,
-        sequence SERIAL,
-        data JSONB NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_events_project_key ON events(project_key);
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-      CREATE TABLE IF NOT EXISTS schema_version (
-        version INTEGER PRIMARY KEY,
-        applied_at BIGINT NOT NULL,
-        description TEXT
-      );
-    `);
-    
-    const db = wrapPGlite(pglite);
+    const { adapter: db } = await createTestLibSQLDb();
     adapter = createHiveAdapter(db, projectKey);
-    await adapter.runMigrations();
   });
 
   describe("createCell", () => {

@@ -1,7 +1,7 @@
 /**
  * Schema Migration System
  *
- * Handles database schema evolution for the PGLite event store.
+ * Handles database schema evolution for the event store.
  *
  * ## How It Works
  *
@@ -40,7 +40,7 @@
  *
  * @module migrations
  */
-import type { PGlite } from "@electric-sql/pglite";
+import type { DatabaseAdapter } from "../types/database.js";
 import { hiveMigrations } from "../hive/migrations.js";
 import { memoryMigrations } from "../memory/migrations.js";
 
@@ -409,7 +409,7 @@ export const migrations: Migration[] = [
 /**
  * Initialize schema_version table if it doesn't exist
  */
-async function ensureVersionTable(db: PGlite): Promise<void> {
+async function ensureVersionTable(db: DatabaseAdapter): Promise<void> {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY,
@@ -424,7 +424,7 @@ async function ensureVersionTable(db: PGlite): Promise<void> {
  *
  * Returns -1 if no migrations have been applied (allows version 0 migrations)
  */
-export async function getCurrentVersion(db: PGlite): Promise<number> {
+export async function getCurrentVersion(db: DatabaseAdapter): Promise<number> {
   await ensureVersionTable(db);
 
   const result = await db.query<{ version: number }>(
@@ -440,7 +440,7 @@ export async function getCurrentVersion(db: PGlite): Promise<number> {
  * Get all applied migrations
  */
 export async function getAppliedMigrations(
-  db: PGlite,
+  db: DatabaseAdapter,
 ): Promise<SchemaVersion[]> {
   await ensureVersionTable(db);
 
@@ -465,7 +465,7 @@ export async function getAppliedMigrations(
  * Idempotent - safe to run multiple times.
  * Only runs migrations that haven't been applied yet.
  */
-export async function runMigrations(db: PGlite): Promise<{
+export async function runMigrations(db: DatabaseAdapter): Promise<{
   applied: number[];
   current: number;
 }> {
@@ -528,7 +528,7 @@ export async function runMigrations(db: PGlite): Promise<{
  * Only use for testing or emergency recovery.
  */
 export async function rollbackTo(
-  db: PGlite,
+  db: DatabaseAdapter,
   targetVersion: number,
 ): Promise<{
   rolledBack: number[];
@@ -583,7 +583,7 @@ export async function rollbackTo(
  * Check if a specific migration has been applied
  */
 export async function isMigrationApplied(
-  db: PGlite,
+  db: DatabaseAdapter,
   version: number,
 ): Promise<boolean> {
   await ensureVersionTable(db);
@@ -599,7 +599,7 @@ export async function isMigrationApplied(
 /**
  * Get pending migrations (not yet applied)
  */
-export async function getPendingMigrations(db: PGlite): Promise<Migration[]> {
+export async function getPendingMigrations(db: DatabaseAdapter): Promise<Migration[]> {
   const currentVersion = await getCurrentVersion(db);
   return migrations
     .filter((m) => m.version > currentVersion)

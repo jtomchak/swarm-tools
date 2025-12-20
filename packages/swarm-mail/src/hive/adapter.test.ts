@@ -13,50 +13,25 @@
  * 7. Query helpers - ready beads, in-progress, blocked
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import type { PGlite } from "@electric-sql/pglite";
+import { beforeEach, describe, expect, test } from "bun:test";
 import type { DatabaseAdapter } from "../types/database.js";
-import { getTestDb, resetTestDatabase, startTestServer, stopTestServer } from "../test-server.js";
+import { createTestLibSQLDb } from "../test-libsql.js";
 import { createHiveAdapter } from "./adapter.js";
 import type { HiveAdapter } from "../types/hive-adapter.js";
-
-/**
- * Wrap PGlite to match DatabaseAdapter interface
- */
-function wrapPGlite(pglite: PGlite): DatabaseAdapter {
-  return {
-    query: <T>(sql: string, params?: unknown[]) => pglite.query<T>(sql, params),
-    exec: async (sql: string) => {
-      await pglite.exec(sql);
-    },
-    close: () => pglite.close(),
-  };
-}
 
 describe("Beads Adapter", () => {
   let db: DatabaseAdapter;
   let adapter: HiveAdapter;
   const projectKey = "/test/project";
 
-  // ONE-TIME setup: Start shared test server
-  beforeAll(async () => {
-    await startTestServer();
-  });
-
-  // BEFORE EACH: Reset database state
+  // BEFORE EACH: Create fresh libSQL database
   beforeEach(async () => {
-    await resetTestDatabase();
-    
-    const pglite = getTestDb();
-    db = wrapPGlite(pglite);
+    // Use libSQL test helper - schema already includes all tables
+    const { adapter: dbAdapter } = await createTestLibSQLDb();
+    db = dbAdapter;
 
-    // Create adapter
+    // Create adapter (no migrations needed - schema already set up)
     adapter = createHiveAdapter(db, projectKey);
-  });
-
-  // CLEANUP: Stop test server after all tests
-  afterAll(async () => {
-    await stopTestServer();
   });
 
   // ============================================================================

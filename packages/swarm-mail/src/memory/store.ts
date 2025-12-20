@@ -248,7 +248,7 @@ export function createMemoryStore(db: SwarmDb) {
           m.decay_factor,
           fts.rank as score
         FROM memories_fts fts
-        JOIN memories m ON m.id = fts.id
+        JOIN memories m ON m.rowid = fts.rowid
         WHERE ${conditions}
         ORDER BY fts.rank
         LIMIT ${limit}
