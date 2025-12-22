@@ -68,9 +68,9 @@ Under the hood, it uses **swarm-mail** for event sourcing and actor-model messag
 
 ## What Makes It Different
 
-**1. Survives Context Death** ✅ *[Proven - 9 integration tests]*
+**1. Survives Context Death** ✅ *[Proven - 95% integration test coverage]*
 
-When `swarm_progress` reports 25%, 50%, or 75% completion, an automatic checkpoint is created and stored in PGLite (embedded Postgres). If context compaction happens or an agent crashes, `swarm_recover` retrieves the last checkpoint with:
+When `swarm_progress` reports 25%, 50%, or 75% completion, an automatic checkpoint is created and stored in libSQL (embedded SQLite). If context compaction happens or an agent crashes, `swarm_recover` retrieves the last checkpoint with:
 
 - Files modified so far
 - Current strategy (file-based, feature-based, risk-based)
@@ -78,7 +78,7 @@ When `swarm_progress` reports 25%, 50%, or 75% completion, an automatic checkpoi
 - Coordinator directives (shared context, skills to load, notes)
 - Error context (if checkpoint happened during error handling)
 
-No external database needed—checkpoints persist in `.swarm-mail/` directory. Non-fatal failures mean work continues even if checkpoint fails.
+No external database needed—checkpoints persist in system temp directory. Non-fatal failures mean work continues even if checkpoint fails.
 
 **2. Learns From Outcomes**
 
@@ -150,13 +150,17 @@ swarm_recover({
 
 ### Storage
 
-Checkpoints are stored in PGLite (embedded Postgres) at `.swarm-mail/` in your project directory. No external database needed. The `swarm_contexts` table tracks all checkpoints with full event sourcing for audit trail.
+Checkpoints are stored in libSQL (embedded SQLite) in your system's temp directory. No external database needed. The `swarm_contexts` table tracks all checkpoints with full event sourcing for audit trail.
 
 ### Failure Handling
 
 Checkpoint failures are **non-fatal**—if a checkpoint fails, work continues. You'll see a warning in logs but the agent keeps going. This prevents checkpoint infrastructure from blocking actual work.
 
 ## Quick Start
+
+See the [Quickstart Guide](/docs/getting-started/quickstart) for detailed installation instructions.
+
+**TL;DR:**
 
 ```bash
 npm install -g opencode-swarm-plugin@latest
@@ -188,7 +192,6 @@ These tools significantly enhance the swarm experience:
 |------|---------|
 | [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) | Historical context - queries past sessions for similar decompositions |
 | [UBS](https://github.com/Dicklesworthstone/ultimate_bug_scanner) | Bug scanning - runs on subtask completion to catch issues |
-| [semantic-memory](https://github.com/joelhooks/semantic-memory) | Learning persistence - stores patterns across sessions |
 
 ### Installing Optional Dependencies
 
@@ -209,28 +212,12 @@ cd ultimate_bug_scanner
 pip install -e .
 ```
 
-#### semantic-memory
-
-Requires [Ollama](https://ollama.ai) with an embedding model:
-
-```bash
-# Install Ollama (macOS)
-brew install ollama
-
-# Start Ollama service
-ollama serve
-
-# Pull an embedding model
-ollama pull mxbai-embed-large
-```
-
-The `semantic-memory_check` tool verifies Ollama is ready.
-
 **Why install these?**
 
 - **CASS** - When you run `/swarm "Add OAuth"`, the coordinator queries CASS for similar past tasks. Without it, decomposition is based only on the current task description.
 - **UBS** - Every `swarm_complete` runs UBS to scan for bugs. Without it, you lose automatic bug detection.
-- **semantic-memory** - Pattern maturity and anti-pattern detection persist across sessions. Without it, learning resets each session.
+
+**Note:** Semantic memory is now embedded in the plugin—no separate installation required. Pattern maturity and anti-pattern detection persist automatically using libSQL.
 
 Run `swarm doctor` to check which dependencies are installed.
 
@@ -295,10 +282,10 @@ await releaseSwarmFiles('WorkerA');
 ### Event Sourcing (swarm-mail)
 
 ```typescript
-import { getSwarmMail } from 'swarm-mail';
+import { getSwarmMailLibSQL } from 'swarm-mail';
 
-// Get swarm mail instance (PGLite adapter)
-const swarmMail = await getSwarmMail('/my/project');
+// Get swarm mail instance (libSQL adapter)
+const swarmMail = await getSwarmMailLibSQL('/my/project');
 
 // Append events
 await swarmMail.appendEvent({
@@ -361,7 +348,7 @@ const response = await Effect.runPromise(
 │  └── DurableDeferred - Distributed promise                 │
 │                                                             │
 │  STORAGE                                                    │
-│  └── PGLite (Embedded Postgres) + Event Sourcing           │
+│  └── libSQL (Embedded SQLite) + Event Sourcing             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -372,7 +359,7 @@ const response = await Effect.runPromise(
 - **Composable** - Mix and match what you need
 - **Zero lock-in** - Works with any agent framework
 - **Type-safe** - Full TypeScript with Zod schemas
-- **Local-first** - PGLite embedded database, no external servers
+- **Local-first** - libSQL embedded database, no external servers
 - **Fast** - Bun-native, minimal dependencies
 
 ## Next Steps

@@ -25,25 +25,35 @@
        🐝        🐝               ██║ ╚═╝ ██║██║  ██║██║███████╗
                                   ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝╚══════╝       🐝
                  🐝
-                             ⚡ Actor-Model Primitives for Agent Coordination ⚡
+                             ⚡ Event Sourcing + Actor Model Primitives ⚡
 ```
 
-Event sourcing primitives for multi-agent coordination. Local-first, no external servers.
+Event sourcing and actor-model primitives for multi-agent coordination. Built on **libSQL** (embedded SQLite) with **Drizzle ORM**. Local-first, no external servers.
 
 **[🌐 swarmtools.ai](https://swarmtools.ai)** | **[📖 Full Documentation](https://swarmtools.ai/docs)**
+
+## What is swarm-mail?
+
+A TypeScript library providing:
+
+1. **Event Store** - Append-only log with automatic projection updates (agents, messages, file reservations)
+2. **Actor Primitives** - DurableMailbox, DurableLock, DurableCursor, DurableDeferred (Effect-TS based)
+3. **Hive** - Git-synced work item tracker (cells, epics, dependencies)
+4. **Semantic Memory** - Vector embeddings for persistent agent learnings (Ollama + pgvector)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     SWARM MAIL STACK                        │
 ├─────────────────────────────────────────────────────────────┤
-│  TIER 3: COORDINATION                                       │
+│  COORDINATION                                               │
+│  ├── HiveAdapter - Work item tracking (cells, epics)       │
 │  └── ask<Req, Res>() - Request/Response (RPC-style)        │
 │                                                             │
-│  TIER 2: PATTERNS                                           │
+│  PATTERNS                                                   │
 │  ├── DurableMailbox - Actor inbox with typed envelopes     │
 │  └── DurableLock - CAS-based mutual exclusion              │
 │                                                             │
-│  TIER 1: PRIMITIVES                                         │
+│  PRIMITIVES                                                 │
 │  ├── DurableCursor - Checkpointed stream reader            │
 │  └── DurableDeferred - Distributed promise                 │
 │                                                             │
@@ -51,7 +61,7 @@ Event sourcing primitives for multi-agent coordination. Local-first, no external
 │  └── Semantic Memory - Vector embeddings (pgvector/Ollama) │
 │                                                             │
 │  STORAGE                                                    │
-│  └── PGLite (Embedded Postgres) + Migrations               │
+│  └── libSQL (Embedded SQLite via Drizzle ORM)              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,17 +71,13 @@ Event sourcing primitives for multi-agent coordination. Local-first, no external
 bun add swarm-mail
 ```
 
-## Usage
-
-### Event Store
-
-Append-only event log with automatic projection updates:
+## Quick Start
 
 ```typescript
-import { getSwarmMail } from "swarm-mail";
+import { getSwarmMailLibSQL } from "swarm-mail";
 
-// Create swarm mail instance (automatically creates PGlite adapter)
-const swarmMail = await getSwarmMail("/my/project");
+// Create swarm mail instance (libSQL + Drizzle)
+const swarmMail = await getSwarmMailLibSQL("/my/project");
 
 // Append events
 await swarmMail.appendEvent({
@@ -84,144 +90,140 @@ await swarmMail.appendEvent({
 // Query projections
 const agents = await swarmMail.getAgents();
 const messages = await swarmMail.getInbox("WorkerA", { limit: 5 });
+
+// Clean shutdown
+await swarmMail.close();
 ```
 
-### Durable Primitives (Effect-TS)
+## Core APIs
 
-Built on Effect-TS for type-safe, composable coordination:
+### Event Store
+
+Append-only event log with automatic projection updates:
 
 ```typescript
-import { DurableMailbox, DurableLock, ask } from 'swarm-mail'
-import { Effect } from 'effect'
+import { getSwarmMailLibSQL } from "swarm-mail";
 
-// Actor mailbox
-const mailbox = DurableMailbox.create<MyMessage>('worker-a')
-await Effect.runPromise(
-  mailbox.send({ type: 'task', payload: 'do something' })
-)
+const swarmMail = await getSwarmMailLibSQL("/my/project");
 
-// File locking
-const lock = DurableLock.create('src/auth.ts')
-await Effect.runPromise(
-  lock.acquire({ ttl: 60000 }).pipe(
-    Effect.flatMap(() => /* do work */),
-    Effect.ensuring(lock.release())
-  )
-)
+// Append events
+await swarmMail.appendEvent({
+  type: "message_sent",
+  from: "WorkerA",
+  to: ["WorkerB"],
+  subject: "Task complete",
+  body: "Auth flow implemented",
+  timestamp: Date.now(),
+});
 
-// Request/response
-const response = await Effect.runPromise(
-  ask<Request, Response>('other-agent', { type: 'get-types' })
-)
+// Query inbox
+const messages = await swarmMail.getInbox("WorkerB", { 
+  limit: 5,
+  unreadOnly: true 
+});
+
+// Get thread
+const thread = await swarmMail.getThread("epic-123");
+
+// Check file reservations
+const conflicts = await swarmMail.checkConflicts([
+  "src/auth.ts"
+], "WorkerA");
 ```
 
-### Database Adapter
+### Hive (Work Item Tracker)
 
-Dependency injection for testing and flexibility:
+Git-synced work item tracking with cells and epics:
 
 ```typescript
-import { DatabaseAdapter, createSwarmMailAdapter } from 'swarm-mail'
+import { createHiveAdapter } from "swarm-mail";
 
-// Implement your own adapter
-const customAdapter: DatabaseAdapter = {
-  query: async (sql, params) => /* ... */,
-  exec: async (sql) => /* ... */,
-  transaction: async (fn) => /* ... */,
-  close: async () => /* ... */
-}
+const hive = await createHiveAdapter({ 
+  projectPath: "/my/project" 
+});
 
-// Use custom adapter
-const swarmMail = createSwarmMailAdapter(customAdapter, '/my/project')
+// Create cell
+const cell = await hive.createCell({
+  title: "Add OAuth",
+  type: "feature",
+  priority: 2,
+});
 
-// Or use the convenience layer (built-in PGLite)
-import { getSwarmMail, createInMemorySwarmMail } from 'swarm-mail'
-const swarmMail = await getSwarmMail('/my/project') // persistent
-const swarmMail = await createInMemorySwarmMail() // in-memory
+// Query cells
+const open = await hive.queryCells({ status: "open" });
+const ready = await hive.queryCells({ ready: true });
+
+// Update cell
+await hive.updateCell(cell.id, { 
+  status: "in_progress",
+  description: "Implementing Google OAuth flow"
+});
+
+// Close cell
+await hive.closeCell(cell.id, "Completed: OAuth implemented");
 ```
 
-## Deployment
+### Semantic Memory
 
-### Connection Modes
-
-#### Daemon Mode (Default)
-
-By default, swarm-mail starts an in-process `PGLiteSocketServer` when you call `getSwarmMail()`. All database operations go through this server, preventing multi-process corruption.
+Vector embeddings for persistent agent learnings:
 
 ```typescript
-import { getSwarmMail } from 'swarm-mail'
+import { createSemanticMemory } from "swarm-mail";
 
-// Default: starts daemon automatically
-const swarmMail = await getSwarmMail('/my/project')
+const memory = await createSemanticMemory("/my/project");
 
-// Keep alive - handles cleanup on shutdown
-process.on('SIGTERM', async () => {
-  await swarmMail.close() // Flushes WAL, closes cleanly
-  process.exit(0)
-})
+// Store a learning
+const { id } = await memory.store(
+  "OAuth refresh tokens need 5min buffer before expiry to avoid race conditions",
+  { tags: "auth,tokens,debugging" }
+);
+
+// Search by meaning (vector similarity)
+const results = await memory.find("token refresh issues", { limit: 5 });
+
+// Get memory by ID
+const mem = await memory.get(id);
+
+// Validate (resets decay timer)
+await memory.validate(id);
+
+// Check Ollama health
+const health = await memory.checkHealth();
+// { ollama: true, model: "mxbai-embed-large" }
 ```
 
-**Why daemon mode is the default:**
+> **Note:** Requires [Ollama](https://ollama.ai/) for vector embeddings. Falls back to full-text search if unavailable.
+>
+> ```bash
+> ollama pull mxbai-embed-large
+> ```
 
-- **No external dependencies** - Uses `@electric-sql/pglite-socket` in-process
-- **Multi-process safe** - One PGLite instance, multiple clients can connect safely
-- **WAL safety** - Single process prevents WAL accumulation from multiple instances
-- **Proper cleanup** - Graceful shutdown triggers checkpoint, preventing unclean state
-- **Resource efficiency** - One PGLite instance shared across operations
+### Custom Database Setup
 
-#### Embedded Mode (Opt-out)
-
-For single-process use cases where you're certain only one process will access the database, you can opt out of daemon mode:
-
-```bash
-SWARM_MAIL_SOCKET=false
-```
-
-⚠️ **Warning:** Embedded mode is NOT safe for multi-process access. PGLite uses a single connection, so concurrent processes will cause database corruption. Use only when you're absolutely certain only one process will access the database
-
-### WAL Safety Features
-
-PGLite uses PostgreSQL's Write-Ahead Log (WAL) for durability. Swarm Mail includes safeguards against WAL bloat:
-
-**Automatic checkpointing:**
-```typescript
-// After batch operations, force WAL flush
-await db.checkpoint()
-```
-
-**Health monitoring:**
-```typescript
-// Check WAL size (default threshold: 100MB)
-const health = await swarmMail.healthCheck({ walThresholdMb: 100 })
-
-if (!health.walHealth?.healthy) {
-  console.warn(health.walHealth?.message)
-  // "WAL size 120MB exceeds 100MB threshold (15 files)"
-}
-
-// Get detailed stats
-const stats = await swarmMail.getDatabaseStats()
-// { connected: true, wal: { size: 120_000_000, fileCount: 15 } }
-```
-
-**When to checkpoint manually:**
-
-- After migrations: `await swarmMail.runMigrations(); await db.checkpoint()`
-- After bulk event appends (100+ events)
-- Before long-running operations
-
-### Ephemeral Instances (Testing)
-
-For tests, create isolated in-memory instances:
+Bring your own libSQL database:
 
 ```typescript
-import { createInMemorySwarmMail } from 'swarm-mail'
+import { createLibSQLAdapter } from "swarm-mail";
+import { drizzle } from "drizzle-orm/libsql";
+import { createClient } from "@libsql/client";
 
-const swarmMail = await createInMemorySwarmMail('test-id')
-// ... run tests ...
-await swarmMail.close()
+// Create libSQL client
+const client = createClient({
+  url: "file:///my/custom/path/swarm.db"
+});
+
+const db = drizzle(client);
+
+// Create adapter
+const swarmMail = createLibSQLAdapter(db, "/my/project");
+
+// Use as normal
+await swarmMail.appendEvent({
+  type: "agent_registered",
+  agent_name: "CustomAgent",
+  timestamp: Date.now(),
+});
 ```
-
-**Don't use ephemeral instances in production** - multiple short-lived processes compound WAL accumulation since each instance creates new PGLite connections without coordinated cleanup.
 
 ## Event Types
 
@@ -234,6 +236,7 @@ type SwarmMailEvent =
       to: string[];
       subject: string;
       body: string;
+      thread_id?: string;
     }
   | { type: "message_read"; message_id: number; agent_name: string }
   | {
@@ -241,6 +244,7 @@ type SwarmMailEvent =
       agent_name: string;
       paths: string[];
       exclusive: boolean;
+      reason?: string;
     }
   | { type: "file_released"; agent_name: string; paths: string[] }
   | {
@@ -260,7 +264,7 @@ type SwarmMailEvent =
 
 ## Projections
 
-Materialized views derived from events:
+Materialized views automatically updated from events:
 
 | Projection          | Description                        |
 | ------------------- | ---------------------------------- |
@@ -270,46 +274,65 @@ Materialized views derived from events:
 | `swarm_contexts`    | Checkpoint state for recovery      |
 | `eval_records`      | Outcome data for learning          |
 
-### Semantic Memory
+## Testing
 
-Persistent, searchable storage for agent learnings:
+For tests, use in-memory instances:
 
 ```typescript
-import { createMemoryAdapter } from 'swarm-mail/memory'
+import { createInMemorySwarmMail } from "swarm-mail";
 
-const swarmMail = await getSwarmMail('/my/project')
-const db = await swarmMail.getDatabase()
-const memory = await createMemoryAdapter(db)
+describe("my feature", () => {
+  let swarmMail: SwarmMailAdapter;
 
-// Store a learning
-const { id } = await memory.store(
-  "OAuth refresh tokens need 5min buffer before expiry...",
-  { tags: "auth,tokens,debugging" }
-)
+  beforeAll(async () => {
+    swarmMail = await createInMemorySwarmMail("test");
+  });
 
-// Search by meaning (vector similarity)
-const results = await memory.find("token refresh issues")
+  afterAll(async () => {
+    await swarmMail.close();
+  });
 
-// Check Ollama health
-const health = await memory.checkHealth()
-// { ollama: true, model: "mxbai-embed-large" }
+  test("appends events", async () => {
+    const result = await swarmMail.appendEvent({
+      type: "agent_registered",
+      agent_name: "TestAgent",
+      timestamp: Date.now(),
+    });
+    
+    expect(result.id).toBeGreaterThan(0);
+  });
+});
 ```
-
-> **Note:** Requires [Ollama](https://ollama.ai/) for vector embeddings. Falls back to full-text search if unavailable.
->
-> ```bash
-> ollama pull mxbai-embed-large
-> ```
-
-> **Deprecation Notice:** The standalone [semantic-memory MCP server](https://github.com/joelhooks/semantic-memory) is deprecated. Use the embedded memory in swarm-mail instead - same API, single PGLite instance, no separate process.
 
 ## Architecture
 
-- **Append-only log** - Events are immutable, projections are derived
-- **Local-first** - PGLite embedded Postgres, no external servers
-- **Effect-TS** - Type-safe, composable, testable
-- **Exactly-once** - DurableCursor checkpoints position
-- **Semantic memory** - Vector embeddings with pgvector + Ollama
+- **Event Sourcing** - Append-only log, projections are derived
+- **Local-first** - libSQL embedded SQLite, no external servers
+- **Type-safe** - TypeScript with Zod validation and Drizzle ORM
+- **Effect-TS** - Composable, testable actor primitives
+- **Git-synced** - Hive cells stored as JSON + git for team coordination
+
+## Migration from v0.31
+
+If you're migrating from PGLite-based swarm-mail:
+
+```typescript
+// OLD (v0.31)
+import { getSwarmMail } from "swarm-mail";
+const swarmMail = await getSwarmMail("/my/project");
+
+// NEW (v0.32+)
+import { getSwarmMailLibSQL } from "swarm-mail";
+const swarmMail = await getSwarmMailLibSQL("/my/project");
+```
+
+**Key changes:**
+- Storage backend: PGLite → libSQL (SQLite-compatible)
+- ORM: Raw SQL → Drizzle ORM
+- Main export: `getSwarmMailLibSQL` (was `getSwarmMail`)
+- Semantic memory: Embedded (was standalone MCP server)
+
+See [CHANGELOG.md](./CHANGELOG.md) for full migration guide.
 
 ## API Reference
 
@@ -348,6 +371,13 @@ interface SwarmMailAdapter {
   debugAgent(name: string): Promise<AgentDebugInfo>;
 }
 ```
+
+## Resources
+
+- **Documentation:** [swarmtools.ai/docs](https://swarmtools.ai/docs)
+- **Architecture:** [SWARM-CONTEXT.md](../../SWARM-CONTEXT.md)
+- **Examples:** [examples/](../../examples/)
+- **Changelog:** [CHANGELOG.md](./CHANGELOG.md)
 
 ## License
 

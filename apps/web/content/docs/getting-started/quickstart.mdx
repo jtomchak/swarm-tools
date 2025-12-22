@@ -1,48 +1,103 @@
 ---
 title: Quickstart
-description: Get up and running with Swarm Tools in 5 minutes
+description: Get up and running with Swarm Tools in 2 minutes
 ---
 
 # Quickstart
 
-Get multi-agent coordination running in your project in under 5 minutes.
+Multi-agent coordination for your codebase. Install, setup, `/swarm` your first task.
 
-## Prerequisites
+**What you get:** Parallel worker agents, automatic file locking, persistent learning, git-backed work tracking.
 
-- Node.js 18+ or Bun
-- OpenCode CLI installed
-- A git repository
-
-## Install the Plugin
+## Install
 
 ```bash
 npm install -g opencode-swarm-plugin@latest
 ```
 
 Or with Bun:
-
 ```bash
 bun add -g opencode-swarm-plugin@latest
 ```
 
-## Setup
+**Prerequisites:** Node.js 18+, OpenCode CLI, git repository
 
-Run the setup wizard:
+## Setup
 
 ```bash
 swarm setup
 ```
 
-This will:
-1. Migrate any existing data from previous versions (automatic)
-2. Check for required dependencies
-3. Configure OpenCode to load the plugin
-4. Initialize the hive in your project (if not already)
-5. Verify everything works
+Expected output:
+```
+✓ Migrating from PGLite to libSQL...
+✓ OpenCode plugin configured
+✓ Hive initialized at .hive/
+✓ All systems ready
+```
 
-## Optional: Semantic Memory
+This handles migrations automatically, configures the OpenCode plugin, and initializes the hive (git-backed work tracker).
 
-For persistent learning across sessions, install Ollama:
+**Check health:**
+```bash
+swarm doctor
+```
+
+```
+✓ OpenCode plugin configured
+✓ Hive storage: libSQL (embedded SQLite)
+✓ Semantic memory: ready
+✓ Dependencies: all installed
+```
+
+## Your First Swarm
+
+In OpenCode:
+
+```
+/swarm "Add a health check endpoint at /api/health"
+```
+
+**What happens:**
+
+```
+Analyzing task...
+Decomposing into 2 subtasks:
+  1. Create /api/health endpoint
+  2. Add health check test
+
+Creating epic: bd-abc123
+  ├─ bd-abc123.1 (worker-1)
+  └─ bd-abc123.2 (worker-2)
+
+Spawning 2 worker agents...
+
+[worker-1] Reserved: src/api/health.ts
+[worker-1] ✓ Created endpoint
+[worker-2] Reserved: src/api/health.test.ts
+[worker-2] ✓ Added tests
+
+✓ All subtasks complete
+✓ UBS scan: 0 issues
+✓ Synced to git
+```
+
+**Files created:**
+- `src/api/health.ts` - endpoint implementation
+- `src/api/health.test.ts` - test coverage
+- `.hive/issues.jsonl` - work tracking (git-committed)
+
+## How Swarm Works
+
+1. **Decompose** - Break task into parallel subtasks
+2. **Reserve** - Each worker locks their files (no conflicts)
+3. **Execute** - Workers run in parallel, report progress
+4. **Verify** - UBS bug scan, type check, test run
+5. **Complete** - Release locks, sync to git, store learnings
+
+## Optional: Vector Search
+
+For semantic memory (search learnings by meaning, not keywords):
 
 ```bash
 brew install ollama
@@ -50,131 +105,62 @@ ollama serve &
 ollama pull mxbai-embed-large
 ```
 
-Without Ollama, the plugin still works but falls back to full-text search instead of vector similarity.
+**Without Ollama:** Falls back to full-text search. Everything still works.
 
-## Verify Installation
+## Key Tools (For Manual Control)
 
-```bash
-swarm doctor
-```
-
-Expected output:
-```
-✓ OpenCode plugin configured
-✓ Hive initialized in project
-✓ All systems ready
-```
-
-## Your First Swarm
-
-In OpenCode, run:
-
-```
-/swarm "Add a health check endpoint at /api/health"
-```
-
-The plugin will:
-1. Analyze the task
-2. Decompose into subtasks (if needed)
-3. Create cells for tracking
-4. Spawn worker agents
-5. Coordinate file reservations
-6. Report completion
-
-## Manual Workflow
-
-If you prefer step-by-step control:
-
-```typescript
-// 1. Check what's ready to work on
-hive_ready()
-
-// 2. Start a task
-hive_start({ id: "bd-123" })
-
-// 3. Initialize coordination (for multi-agent work)
-swarmmail_init({ project_path: "/your/project" })
-
-// 4. Reserve files before editing
-swarmmail_reserve({
-  paths: ["src/api/**"],
-  reason: "bd-123: Health endpoint"
-})
-
-// 5. Do your work...
-
-// 6. Complete the task
-swarm_complete({
-  project_key: "/your/project",
-  agent_name: "YourAgent",
-  cell_id: "bd-123",
-  summary: "Added /api/health endpoint",
-  files_touched: ["src/api/health.ts"]
-})
-
-// 7. Sync to git (MANDATORY)
-hive_sync()
-```
-
-## Using Skills
-
-Load domain expertise into your context:
-
-```typescript
-// List available skills
-skills_list()
-
-// Load a skill for your current task
-skills_use({ name: "testing-patterns" })
-```
-
-Bundled skills include:
-- **testing-patterns** - Dependency breaking, characterization tests
-- **swarm-coordination** - Multi-agent orchestration
-- **cli-builder** - Building command-line tools
-- **system-design** - Architecture decisions
-
-## Key Commands
-
-| Command | Purpose |
-|---------|---------|
-| `swarm setup` | Initial configuration |
-| `swarm doctor` | Check dependencies |
-| `swarm init` | Initialize hive in project |
-| `swarm config` | Show config paths |
-
-## Key Tools
+Most work happens via `/swarm`, but you can drive manually:
 
 | Tool | Purpose |
 |------|---------|
 | `hive_ready()` | Get next unblocked task |
+| `hive_create()` | Create new work item |
 | `hive_sync()` | Sync to git (MANDATORY at session end) |
-| `swarmmail_init()` | Initialize coordination |
-| `swarmmail_reserve()` | Reserve files for editing |
-| `swarm_complete()` | Complete task with cleanup |
-| `skills_use()` | Load domain expertise |
+| `swarmmail_init()` | Initialize coordination for multi-agent work |
+| `swarmmail_reserve()` | Lock files before editing |
+| `swarm_complete()` | Finish task + cleanup |
+| `skills_use()` | Load domain expertise (testing, CLI building, etc) |
 | `semantic-memory_store()` | Store learnings for future sessions |
 | `semantic-memory_find()` | Search past learnings by meaning |
 
 ## Using Semantic Memory
 
-Store learnings for future sessions:
-
 ```typescript
 // After solving a tricky bug
 semantic-memory_store({
-  information: "OAuth refresh tokens need 5min buffer before expiry...",
-  tags: "auth,tokens,debugging"
+  information: "OAuth refresh tokens need 5min buffer before expiry to avoid race conditions. Implemented with: if (expiresAt - Date.now() < 300000) refresh()",
+  tags: "auth,tokens,race-conditions"
 })
 
 // Before starting similar work
 semantic-memory_find({
-  query: "authentication token issues",
+  query: "token refresh race conditions",
   limit: 5
 })
 ```
 
-Memories persist across sessions and are searchable by meaning (vector similarity). See [Semantic Memory](/docs/packages/swarm-mail/memory) for details.
+Memories persist across sessions. 90-day decay keeps knowledge fresh.
+
+## Using Skills
+
+Pre-built expertise packages:
+
+```typescript
+skills_list() // See available skills
+skills_use({ name: "testing-patterns" }) // Load Feathers' dependency-breaking techniques
+skills_use({ name: "swarm-coordination" }) // Multi-agent orchestration patterns
+```
+
+Bundled skills: **testing-patterns**, **swarm-coordination**, **cli-builder**, **system-design**
+
+## CLI Commands
+
+| Command | Purpose |
+|---------|---------|
+| `swarm setup` | Initial configuration (run once) |
+| `swarm doctor` | Check dependencies and health |
+| `swarm init` | Initialize hive in new project |
+| `swarm config` | Show config paths |
 
 ## What's Next
 
@@ -188,7 +174,7 @@ Memories persist across sessions and are searchable by meaning (vector similarit
 
 **"swarmmail_init failed"**
 - Ensure you're in a git repository
-- Check that `.opencode/` directory is writable
+- Check `.opencode/` directory is writable
 
 **"Plugin not loading"**
 ```bash
@@ -196,12 +182,17 @@ swarm setup  # Re-run setup
 swarm doctor # Check what's missing
 ```
 
+**Migrations stuck**
+- `swarm setup` auto-migrates PGLite → libSQL
+- Check `.hive/` directory permissions
+- Run `swarm doctor` to verify storage
+
 ## Session Checklist
 
-Every session should:
+Every session:
 
-1. **Start**: `hive_ready()` - What's next?
-2. **Work**: Use tools, reserve files, communicate
-3. **End**: `hive_sync()` + `git push` - Land the plane
+1. **Start:** `hive_ready()` - What's next?
+2. **Work:** `/swarm` for parallel tasks OR use tools manually
+3. **End:** `hive_sync()` + `git push` - **The plane is not landed until `git push` succeeds**
 
-The plane is not landed until `git push` succeeds.
+That's it. Install, setup, `/swarm`. Ship it.
