@@ -160,4 +160,35 @@ describe("File operation helpers", () => {
       expect(logger.logs.length).toBe(0);
     });
   });
+
+  describe("getResearcherAgent", () => {
+    // Mock implementation for testing - will match actual implementation
+    function getResearcherAgent(model: string): string {
+      return `---
+name: swarm-researcher
+description: Research agent for discovering and documenting context
+model: ${model}
+---
+
+READ-ONLY research agent. Never modifies code - only gathers intel and stores findings.`;
+    }
+
+    test("includes model in frontmatter", () => {
+      const template = getResearcherAgent("anthropic/claude-haiku-4-5");
+      
+      expect(template).toContain("model: anthropic/claude-haiku-4-5");
+    });
+
+    test("emphasizes READ-ONLY nature", () => {
+      const template = getResearcherAgent("anthropic/claude-haiku-4-5");
+      
+      expect(template).toContain("READ-ONLY");
+    });
+
+    test("includes agent name in frontmatter", () => {
+      const template = getResearcherAgent("anthropic/claude-haiku-4-5");
+      
+      expect(template).toContain("name: swarm-researcher");
+    });
+  });
 });

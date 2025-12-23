@@ -552,6 +552,124 @@ Other cell operations:
 Begin now.`;
 
 /**
+ * Researcher prompt template for documentation discovery
+ *
+ * Spawned BEFORE decomposition to gather technology documentation.
+ * Researchers receive an EXPLICIT list of technologies to research from the coordinator.
+ * They dynamically discover WHAT TOOLS are available to fetch docs.
+ * Output: condensed summary for shared_context + detailed findings in semantic-memory.
+ */
+export const RESEARCHER_PROMPT = `You are a swarm researcher gathering documentation for: **{research_id}**
+
+## [IDENTITY]
+Agent: (assigned at spawn)
+Research Task: {research_id}
+Epic: {epic_id}
+
+## [MISSION]
+Gather comprehensive documentation for the specified technologies to inform task decomposition.
+
+**COORDINATOR PROVIDED THESE TECHNOLOGIES TO RESEARCH:**
+{tech_stack}
+
+You do NOT discover what to research - the coordinator already decided that.
+You DO discover what TOOLS are available to fetch documentation.
+
+## [OUTPUT MODE]
+{check_upgrades}
+
+## [WORKFLOW]
+
+### Step 1: Initialize (MANDATORY FIRST)
+\`\`\`
+swarmmail_init(project_path="{project_path}", task_description="{research_id}: Documentation research")
+\`\`\`
+
+### Step 2: Discover Available Documentation Tools
+Check what's available for fetching docs:
+- **next-devtools**: \`nextjs_docs\` for Next.js documentation
+- **context7**: Library documentation lookup (\`use context7\` in prompts)
+- **fetch**: General web fetching for official docs sites
+- **pdf-brain**: Internal knowledge base search
+
+**Don't assume** - check which tools exist in your environment.
+
+### Step 3: Read Installed Versions
+For each technology in the tech stack:
+1. Check package.json (or equivalent) for installed version
+2. Record exact version numbers
+3. Note any version constraints (^, ~, etc.)
+
+### Step 4: Fetch Documentation
+For EACH technology in the list:
+- Use the most appropriate tool (Next.js → nextjs_docs, libraries → context7, others → fetch)
+- Fetch documentation for the INSTALLED version (not latest, unless --check-upgrades)
+- Focus on: API changes, breaking changes, migration guides, best practices
+- Extract key patterns, gotchas, and compatibility notes
+
+**If --check-upgrades mode:**
+- ALSO fetch docs for the LATEST version
+- Compare installed vs latest
+- Note breaking changes, new features, migration complexity
+
+### Step 5: Store Detailed Findings
+For EACH technology, store in semantic-memory:
+\`\`\`
+semantic-memory_store(
+  information="<technology-name> <version>: <key patterns, gotchas, API changes, compatibility notes>",
+  tags="research, <tech-name>, documentation, {epic_id}"
+)
+\`\`\`
+
+**Why store individually?** Future agents can search by technology name.
+
+### Step 6: Broadcast Summary
+Send condensed findings to coordinator:
+\`\`\`
+swarmmail_send(
+  to=["coordinator"],
+  subject="Research Complete: {research_id}",
+  body="<brief summary - see semantic-memory for details>",
+  thread_id="{epic_id}"
+)
+\`\`\`
+
+### Step 7: Return Structured Output
+Output JSON with:
+\`\`\`json
+{
+  "technologies": [
+    {
+      "name": "string",
+      "installed_version": "string",
+      "latest_version": "string | null",  // Only if --check-upgrades
+      "key_patterns": ["string"],
+      "gotchas": ["string"],
+      "breaking_changes": ["string"],  // Only if --check-upgrades
+      "memory_id": "string"  // ID of semantic-memory entry
+    }
+  ],
+  "summary": "string"  // Condensed summary for shared_context
+}
+\`\`\`
+
+## [CRITICAL REQUIREMENTS]
+
+**NON-NEGOTIABLE:**
+1. Step 1 (swarmmail_init) MUST be first
+2. Research ONLY the technologies the coordinator specified
+3. Fetch docs for INSTALLED versions (unless --check-upgrades)
+4. Store detailed findings in semantic-memory (one per technology)
+5. Return condensed summary for coordinator (full details in memory)
+6. Use appropriate doc tools (nextjs_docs for Next.js, context7 for libraries, etc.)
+
+**Output goes TWO places:**
+- **semantic-memory**: Detailed findings (searchable by future agents)
+- **Return JSON**: Condensed summary (for coordinator's shared_context)
+
+Begin research now.`;
+
+/**
  * Coordinator post-worker checklist - MANDATORY review loop
  *
  * This checklist is returned to coordinators after spawning a worker.
@@ -655,6 +773,30 @@ should describe what needs to be fixed.`;
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Format the researcher prompt for a documentation research task
+ */
+export function formatResearcherPrompt(params: {
+  research_id: string;
+  epic_id: string;
+  tech_stack: string[];
+  project_path: string;
+  check_upgrades: boolean;
+}): string {
+  const techList = params.tech_stack.map((t) => `- ${t}`).join("\n");
+  
+  const upgradesMode = params.check_upgrades
+    ? "**UPGRADE COMPARISON MODE**: Fetch docs for BOTH installed AND latest versions. Compare and note breaking changes."
+    : "**DEFAULT MODE**: Fetch docs for INSTALLED versions only (from lockfiles).";
+
+  return RESEARCHER_PROMPT
+    .replace(/{research_id}/g, params.research_id)
+    .replace(/{epic_id}/g, params.epic_id)
+    .replace("{tech_stack}", techList)
+    .replace("{project_path}", params.project_path)
+    .replace("{check_upgrades}", upgradesMode);
+}
 
 /**
  * Format the V2 subtask prompt for a specific agent
@@ -938,6 +1080,68 @@ export const swarm_spawn_subtask = tool({
 });
 
 /**
+ * Prepare a researcher task for spawning with Task tool
+ * 
+ * Generates a prompt that tells the researcher to fetch documentation for specific technologies.
+ * Returns JSON that can be directly used with Task tool.
+ */
+export const swarm_spawn_researcher = tool({
+  description:
+    "Prepare a research task for spawning. Returns prompt for gathering technology documentation. Researcher fetches docs and stores findings in semantic-memory.",
+  args: {
+    research_id: tool.schema.string().describe("Unique ID for this research task"),
+    epic_id: tool.schema.string().describe("Parent epic ID"),
+    tech_stack: tool.schema
+      .array(tool.schema.string())
+      .describe("Explicit list of technologies to research (from coordinator)"),
+    project_path: tool.schema
+      .string()
+      .describe("Absolute project path for swarmmail_init"),
+    check_upgrades: tool.schema
+      .boolean()
+      .optional()
+      .describe("If true, compare installed vs latest versions (default: false)"),
+  },
+  async execute(args) {
+    const prompt = formatResearcherPrompt({
+      research_id: args.research_id,
+      epic_id: args.epic_id,
+      tech_stack: args.tech_stack,
+      project_path: args.project_path,
+      check_upgrades: args.check_upgrades ?? false,
+    });
+
+    return JSON.stringify(
+      {
+        prompt,
+        research_id: args.research_id,
+        epic_id: args.epic_id,
+        tech_stack: args.tech_stack,
+        project_path: args.project_path,
+        check_upgrades: args.check_upgrades ?? false,
+        subagent_type: "swarm/researcher",
+        expected_output: {
+          technologies: [
+            {
+              name: "string",
+              installed_version: "string",
+              latest_version: "string | null",
+              key_patterns: ["string"],
+              gotchas: ["string"],
+              breaking_changes: ["string"],
+              memory_id: "string",
+            },
+          ],
+          summary: "string",
+        },
+      },
+      null,
+      2,
+    );
+  },
+});
+
+/**
  * Generate self-evaluation prompt
  */
 export const swarm_evaluation_prompt = tool({
@@ -1125,6 +1329,7 @@ export const swarm_plan_prompt = tool({
 export const promptTools = {
   swarm_subtask_prompt,
   swarm_spawn_subtask,
+  swarm_spawn_researcher,
   swarm_evaluation_prompt,
   swarm_plan_prompt,
 };

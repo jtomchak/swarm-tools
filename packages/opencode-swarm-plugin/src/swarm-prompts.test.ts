@@ -8,7 +8,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatSubtaskPromptV2,
+  formatResearcherPrompt,
   SUBTASK_PROMPT_V2,
+  RESEARCHER_PROMPT,
 } from "./swarm-prompts";
 
 describe("SUBTASK_PROMPT_V2", () => {
@@ -264,5 +266,320 @@ describe("swarm_spawn_subtask tool", () => {
     // Should have strong language
     expect(instructions).toMatch(/⚠️|MANDATORY|NON-NEGOTIABLE|DO NOT skip/i);
     expect(instructions).toContain("DO THIS IMMEDIATELY");
+  });
+});
+
+describe("RESEARCHER_PROMPT", () => {
+  describe("required sections", () => {
+    test("includes IDENTITY section with research_id and epic_id", () => {
+      expect(RESEARCHER_PROMPT).toContain("## [IDENTITY]");
+      expect(RESEARCHER_PROMPT).toContain("{research_id}");
+      expect(RESEARCHER_PROMPT).toContain("{epic_id}");
+    });
+
+    test("includes MISSION section explaining the role", () => {
+      expect(RESEARCHER_PROMPT).toContain("## [MISSION]");
+      expect(RESEARCHER_PROMPT).toMatch(/gather.*documentation/i);
+    });
+
+    test("includes WORKFLOW section with numbered steps", () => {
+      expect(RESEARCHER_PROMPT).toContain("## [WORKFLOW]");
+      expect(RESEARCHER_PROMPT).toContain("### Step 1:");
+      expect(RESEARCHER_PROMPT).toContain("### Step 2:");
+    });
+
+    test("includes CRITICAL REQUIREMENTS section", () => {
+      expect(RESEARCHER_PROMPT).toContain("## [CRITICAL REQUIREMENTS]");
+      expect(RESEARCHER_PROMPT).toMatch(/NON-NEGOTIABLE/i);
+    });
+  });
+
+  describe("workflow steps", () => {
+    test("Step 1 is swarmmail_init (MANDATORY FIRST)", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/### Step 1:.*Initialize/i);
+      expect(RESEARCHER_PROMPT).toContain("swarmmail_init");
+      expect(RESEARCHER_PROMPT).toContain("project_path");
+    });
+
+    test("Step 2 is discovering available documentation tools", () => {
+      const step2Match = RESEARCHER_PROMPT.match(/### Step 2:[\s\S]*?### Step 3:/);
+      expect(step2Match).not.toBeNull();
+      if (!step2Match) return;
+      
+      const step2Content = step2Match[0];
+      expect(step2Content).toMatch(/discover.*tools/i);
+      expect(step2Content).toContain("nextjs_docs");
+      expect(step2Content).toContain("context7");
+      expect(step2Content).toContain("fetch");
+      expect(step2Content).toContain("pdf-brain");
+    });
+
+    test("Step 3 is reading installed versions", () => {
+      const step3Match = RESEARCHER_PROMPT.match(/### Step 3:[\s\S]*?### Step 4:/);
+      expect(step3Match).not.toBeNull();
+      if (!step3Match) return;
+      
+      const step3Content = step3Match[0];
+      expect(step3Content).toMatch(/read.*installed.*version/i);
+      expect(step3Content).toContain("package.json");
+    });
+
+    test("Step 4 is fetching documentation", () => {
+      const step4Match = RESEARCHER_PROMPT.match(/### Step 4:[\s\S]*?### Step 5:/);
+      expect(step4Match).not.toBeNull();
+      if (!step4Match) return;
+      
+      const step4Content = step4Match[0];
+      expect(step4Content).toMatch(/fetch.*documentation/i);
+      expect(step4Content).toContain("INSTALLED version");
+    });
+
+    test("Step 5 is storing detailed findings in semantic-memory", () => {
+      const step5Match = RESEARCHER_PROMPT.match(/### Step 5:[\s\S]*?### Step 6:/);
+      expect(step5Match).not.toBeNull();
+      if (!step5Match) return;
+      
+      const step5Content = step5Match[0];
+      expect(step5Content).toContain("semantic-memory_store");
+      expect(step5Content).toMatch(/store.*individually/i);
+    });
+
+    test("Step 6 is broadcasting summary to coordinator", () => {
+      const step6Match = RESEARCHER_PROMPT.match(/### Step 6:[\s\S]*?### Step 7:/);
+      expect(step6Match).not.toBeNull();
+      if (!step6Match) return;
+      
+      const step6Content = step6Match[0];
+      expect(step6Content).toContain("swarmmail_send");
+      expect(step6Content).toContain("coordinator");
+    });
+
+    test("Step 7 is returning structured JSON output", () => {
+      const step7Match = RESEARCHER_PROMPT.match(/### Step 7:[\s\S]*?(?=## \[|$)/);
+      expect(step7Match).not.toBeNull();
+      if (!step7Match) return;
+      
+      const step7Content = step7Match[0];
+      expect(step7Content).toContain("JSON");
+      expect(step7Content).toContain("technologies");
+      expect(step7Content).toContain("summary");
+    });
+  });
+
+  describe("coordinator-provided tech stack", () => {
+    test("emphasizes that coordinator provides the tech list", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/COORDINATOR PROVIDED.*TECHNOLOGIES/i);
+      expect(RESEARCHER_PROMPT).toContain("{tech_stack}");
+    });
+
+    test("clarifies researcher does NOT discover what to research", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/NOT discover what to research/i);
+      expect(RESEARCHER_PROMPT).toMatch(/DO discover.*TOOLS/i);
+    });
+  });
+
+  describe("upgrade comparison mode", () => {
+    test("includes placeholder for check_upgrades mode", () => {
+      expect(RESEARCHER_PROMPT).toContain("{check_upgrades}");
+    });
+
+    test("mentions comparing installed vs latest when in upgrade mode", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/check-upgrades/i);
+      expect(RESEARCHER_PROMPT).toMatch(/compare|latest.*version/i);
+    });
+  });
+
+  describe("output requirements", () => {
+    test("specifies TWO output destinations: semantic-memory and return JSON", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/TWO places/i);
+      expect(RESEARCHER_PROMPT).toContain("semantic-memory");
+      expect(RESEARCHER_PROMPT).toContain("Return JSON");
+    });
+
+    test("explains semantic-memory is for detailed findings", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/semantic-memory.*detailed/i);
+    });
+
+    test("explains return JSON is for condensed summary", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/return.*condensed.*summary/i);
+    });
+  });
+});
+
+describe("formatResearcherPrompt", () => {
+  test("substitutes research_id placeholder", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js", "React"],
+      project_path: "/path/to/project",
+      check_upgrades: false,
+    });
+
+    expect(result).toContain("research-abc123");
+    expect(result).not.toContain("{research_id}");
+  });
+
+  test("substitutes epic_id placeholder", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/path/to/project",
+      check_upgrades: false,
+    });
+
+    expect(result).toContain("epic-xyz789");
+    expect(result).not.toContain("{epic_id}");
+  });
+
+  test("formats tech_stack as bulleted list", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js", "React", "TypeScript"],
+      project_path: "/path/to/project",
+      check_upgrades: false,
+    });
+
+    expect(result).toContain("- Next.js");
+    expect(result).toContain("- React");
+    expect(result).toContain("- TypeScript");
+  });
+
+  test("substitutes project_path placeholder", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/Users/joel/Code/my-project",
+      check_upgrades: false,
+    });
+
+    expect(result).toContain("/Users/joel/Code/my-project");
+    expect(result).not.toContain("{project_path}");
+  });
+
+  test("includes DEFAULT MODE text when check_upgrades=false", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/path/to/project",
+      check_upgrades: false,
+    });
+
+    expect(result).toContain("DEFAULT MODE");
+    expect(result).toContain("INSTALLED versions only");
+  });
+
+  test("includes UPGRADE COMPARISON MODE text when check_upgrades=true", () => {
+    const result = formatResearcherPrompt({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/path/to/project",
+      check_upgrades: true,
+    });
+
+    expect(result).toContain("UPGRADE COMPARISON MODE");
+    expect(result).toContain("BOTH installed AND latest");
+    expect(result).toContain("breaking changes");
+  });
+});
+
+describe("swarm_spawn_researcher tool", () => {
+  test("returns JSON with prompt field", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js", "React"],
+      project_path: "/Users/joel/Code/project",
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed).toHaveProperty("prompt");
+    expect(typeof parsed.prompt).toBe("string");
+    expect(parsed.prompt.length).toBeGreaterThan(100);
+  });
+
+  test("returns subagent_type field as 'swarm/researcher'", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/Users/joel/Code/project",
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.subagent_type).toBe("swarm/researcher");
+  });
+
+  test("returns expected_output schema", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/Users/joel/Code/project",
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed).toHaveProperty("expected_output");
+    expect(parsed.expected_output).toHaveProperty("technologies");
+    expect(parsed.expected_output).toHaveProperty("summary");
+  });
+
+  test("defaults check_upgrades to false when not provided", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/Users/joel/Code/project",
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.check_upgrades).toBe(false);
+  });
+
+  test("respects check_upgrades when provided as true", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js"],
+      project_path: "/Users/joel/Code/project",
+      check_upgrades: true,
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.check_upgrades).toBe(true);
+  });
+
+  test("includes all input parameters in returned JSON", async () => {
+    const { swarm_spawn_researcher } = await import("./swarm-prompts");
+    
+    const result = await swarm_spawn_researcher.execute({
+      research_id: "research-abc123",
+      epic_id: "epic-xyz789",
+      tech_stack: ["Next.js", "React", "TypeScript"],
+      project_path: "/Users/joel/Code/project",
+      check_upgrades: true,
+    });
+
+    const parsed = JSON.parse(result);
+    expect(parsed.research_id).toBe("research-abc123");
+    expect(parsed.epic_id).toBe("epic-xyz789");
+    expect(parsed.tech_stack).toEqual(["Next.js", "React", "TypeScript"]);
+    expect(parsed.project_path).toBe("/Users/joel/Code/project");
+    expect(parsed.check_upgrades).toBe(true);
   });
 });
