@@ -257,3 +257,8 @@
 {"id":"mem_mjk81cmm_pxhe6tv","information":"Test memory for adapter wiring verification","created_at":"2025-12-24T16:21:37.966Z","tags":"test,memory"}
 {"id":"mem_mjk81cqo_v3w2110","information":"OAuth refresh tokens need 5min buffer before expiry","created_at":"2025-12-24T16:21:38.112Z","metadata":"{\"raw\":\"auth,tokens,oauth\"}","tags":"auth,integration-test"}
 {"id":"mem_mjk81cua_hhxy8qi","information":"Smoke test verified full tool adapter wiring works end-to-end","created_at":"2025-12-24T16:21:38.242Z","tags":"test,verification"}
+{"id":"mem_mjk91g18_y5s6wkg","information":"Test memory for tools integration","created_at":"2025-12-24T16:49:41.996Z","tags":"test"}
+{"id":"mem_mjk91ge8_39uareg","information":"Findable test memory with unique keyword xyztest123","created_at":"2025-12-24T16:49:42.464Z"}
+{"id":"mem_mjk91k4k_a255x4y","information":"Test memory for adapter wiring verification","created_at":"2025-12-24T16:49:47.300Z","tags":"test,memory"}
+{"id":"mem_mjk91kac_7tn2d8n","information":"OAuth refresh tokens need 5min buffer before expiry","created_at":"2025-12-24T16:49:47.508Z","metadata":"{\"raw\":\"auth,tokens,oauth\"}","tags":"auth,integration-test"}
+{"id":"mem_mjk91knd_unxg7d7","information":"Smoke test verified full tool adapter wiring works end-to-end","created_at":"2025-12-24T16:49:47.977Z","tags":"test,verification"}
