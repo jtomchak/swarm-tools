@@ -28,6 +28,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createClient, type Client } from "@libsql/client";
 import { createLibSQLMemorySchema } from "./memory/libsql-schema.js";
+import { warnPGliteDeprecation } from "./pglite.js";
 
 export interface MigrationOptions {
   /** Path to PGlite data directory (contains PG_VERSION) */
@@ -60,10 +61,16 @@ export function pgliteExists(path: string): boolean {
 
 /**
  * Migrate all data from PGlite to libSQL
+ *
+ * @deprecated This is the last version supporting PGlite migration.
+ * PGlite support will be removed in the next major version.
  */
 export async function migratePGliteToLibSQL(
   options: MigrationOptions
 ): Promise<MigrationResult> {
+  // Warn about PGlite deprecation
+  warnPGliteDeprecation();
+
   const {
     pglitePath,
     libsqlPath,

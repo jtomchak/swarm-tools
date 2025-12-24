@@ -263,3 +263,8 @@ export {
 	migratePGliteToLibSQL,
 	pgliteExists,
 } from "./migrate-pglite-to-libsql";
+
+export {
+	warnPGliteDeprecation,
+	wrapPGlite,
+} from "./pglite";

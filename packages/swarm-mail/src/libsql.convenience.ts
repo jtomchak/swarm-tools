@@ -30,8 +30,9 @@ import { basename, join } from "node:path";
 import { createSwarmMailAdapter } from "./adapter.js";
 import { createDrizzleClient } from "./db/drizzle.js";
 import type { SwarmDb } from "./db/client.js";
-import { createLibSQLAdapter, convertPlaceholders } from "./libsql.js";
+import { createLibSQLAdapter } from "./libsql.js";
 import { createLibSQLMemorySchema } from "./memory/libsql-schema.js";
+import { warnPGliteDeprecation } from "./pglite.js";
 import { createLibSQLStreamsSchema } from "./streams/libsql-schema.js";
 import type { SwarmMailAdapter } from "./types/adapter.js";
 import type { DatabaseAdapter } from "./types/database.js";
@@ -288,7 +289,8 @@ export function toDrizzleDb(db: any): SwarmDb {
   
   // Check if it's PGlite (has query and exec methods)
   if (db && typeof db.query === 'function' && typeof db.exec === 'function') {
-    // PGlite path - use drizzle-orm/pglite adapter
+    // DEPRECATED: PGlite path - warn and use drizzle-orm/pglite adapter
+    warnPGliteDeprecation();
     const { drizzle } = require('drizzle-orm/pglite');
     const { schema } = require('./db/schema/index.js');
     return drizzle(db, { schema });
