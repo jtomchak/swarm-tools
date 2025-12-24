@@ -57,6 +57,11 @@ import {
 import {
   analyzeTodoWrite,
   shouldAnalyzeTool,
+  detectCoordinatorViolation,
+  isInCoordinatorContext,
+  getCoordinatorContext,
+  setCoordinatorContext,
+  clearCoordinatorContext,
 } from "./planning-guardrails";
 import { createCompactionHook } from "./compaction-hook";
 
@@ -190,6 +195,8 @@ const SwarmPlugin: Plugin = async (
      *
      * Warns when agents are about to make planning mistakes:
      * - Using todowrite for multi-file implementation (should use swarm)
+     * - Coordinator editing files directly (should spawn workers)
+     * - Coordinator running tests (workers should run tests)
      */
     "tool.execute.before": async (input, output) => {
       const toolName = input.tool;
@@ -200,6 +207,36 @@ const SwarmPlugin: Plugin = async (
         if (analysis.warning) {
           console.warn(`[swarm-plugin] ${analysis.warning}`);
         }
+      }
+
+      // Check for coordinator violations when in coordinator context
+      if (isInCoordinatorContext()) {
+        const ctx = getCoordinatorContext();
+        const violation = detectCoordinatorViolation({
+          sessionId: ctx.sessionId || "unknown",
+          epicId: ctx.epicId || "unknown",
+          toolName,
+          toolArgs: output.args as Record<string, unknown>,
+          agentContext: "coordinator",
+        });
+
+        if (violation.isViolation) {
+          console.warn(`[swarm-plugin] ${violation.message}`);
+        }
+      }
+
+      // Activate coordinator context when swarm tools are used
+      if (toolName === "hive_create_epic" || toolName === "swarm_decompose") {
+        setCoordinatorContext({
+          isCoordinator: true,
+          sessionId: input.sessionID,
+        });
+      }
+
+      // Capture epic ID when epic is created
+      if (toolName === "hive_create_epic" && output.args) {
+        const args = output.args as { epic_title?: string };
+        // Epic ID will be set after execution in tool.execute.after
       }
     },
 
@@ -256,6 +293,36 @@ const SwarmPlugin: Plugin = async (
       // Auto-release after swarm:complete
       if (toolName === "swarm_complete" && activeAgentMailState) {
         await releaseReservations();
+      }
+
+      // Capture epic ID when epic is created (for coordinator context)
+      if (toolName === "hive_create_epic" && output.output) {
+        try {
+          const result = JSON.parse(output.output);
+          if (result.epic?.id) {
+            setCoordinatorContext({
+              isCoordinator: true,
+              epicId: result.epic.id,
+              sessionId: input.sessionID,
+            });
+          }
+        } catch {
+          // Parsing failed - ignore
+        }
+      }
+
+      // Clear coordinator context when epic is closed
+      if (toolName === "hive_close" && output.output && isInCoordinatorContext()) {
+        const ctx = getCoordinatorContext();
+        try {
+          // Check if the closed cell is the active epic
+          const result = JSON.parse(output.output);
+          if (result.id === ctx.epicId) {
+            clearCoordinatorContext();
+          }
+        } catch {
+          // Parsing failed - ignore
+        }
       }
 
       // Note: hive_sync should be called explicitly at session end

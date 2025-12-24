@@ -3,6 +3,10 @@ import {
   analyzeTodoWrite,
   shouldAnalyzeTool,
   detectCoordinatorViolation,
+  setCoordinatorContext,
+  getCoordinatorContext,
+  clearCoordinatorContext,
+  isInCoordinatorContext,
   type ViolationDetectionResult,
 } from "./planning-guardrails";
 import * as fs from "node:fs";
@@ -396,6 +400,91 @@ describe("planning-guardrails", () => {
         const sessionDir = path.join(os.homedir(), ".config", "swarm-tools", "sessions");
         const sessionPath = path.join(sessionDir, `${sessionId}.jsonl`);
         expect(fs.existsSync(sessionPath)).toBe(false);
+      });
+    });
+  });
+
+  describe("coordinator context", () => {
+    beforeEach(() => {
+      clearCoordinatorContext();
+    });
+
+    afterEach(() => {
+      clearCoordinatorContext();
+    });
+
+    describe("setCoordinatorContext", () => {
+      it("sets coordinator context", () => {
+        setCoordinatorContext({
+          isCoordinator: true,
+          epicId: "test-epic-123",
+          sessionId: "test-session-456",
+        });
+
+        const ctx = getCoordinatorContext();
+        expect(ctx.isCoordinator).toBe(true);
+        expect(ctx.epicId).toBe("test-epic-123");
+        expect(ctx.sessionId).toBe("test-session-456");
+        expect(ctx.activatedAt).toBeDefined();
+      });
+
+      it("merges with existing context", () => {
+        setCoordinatorContext({
+          isCoordinator: true,
+          sessionId: "session-1",
+        });
+
+        setCoordinatorContext({
+          epicId: "epic-1",
+        });
+
+        const ctx = getCoordinatorContext();
+        expect(ctx.isCoordinator).toBe(true);
+        expect(ctx.sessionId).toBe("session-1");
+        expect(ctx.epicId).toBe("epic-1");
+      });
+    });
+
+    describe("isInCoordinatorContext", () => {
+      it("returns false when not in coordinator context", () => {
+        expect(isInCoordinatorContext()).toBe(false);
+      });
+
+      it("returns true when in coordinator context", () => {
+        setCoordinatorContext({
+          isCoordinator: true,
+          epicId: "test-epic",
+        });
+
+        expect(isInCoordinatorContext()).toBe(true);
+      });
+
+      it("returns false after context is cleared", () => {
+        setCoordinatorContext({
+          isCoordinator: true,
+          epicId: "test-epic",
+        });
+
+        clearCoordinatorContext();
+
+        expect(isInCoordinatorContext()).toBe(false);
+      });
+    });
+
+    describe("clearCoordinatorContext", () => {
+      it("clears all context", () => {
+        setCoordinatorContext({
+          isCoordinator: true,
+          epicId: "test-epic",
+          sessionId: "test-session",
+        });
+
+        clearCoordinatorContext();
+
+        const ctx = getCoordinatorContext();
+        expect(ctx.isCoordinator).toBe(false);
+        expect(ctx.epicId).toBeUndefined();
+        expect(ctx.sessionId).toBeUndefined();
       });
     });
   });

@@ -351,3 +351,88 @@ export function detectCoordinatorViolation(params: {
 
   return { isViolation: false };
 }
+
+/**
+ * Coordinator context state
+ * 
+ * Tracks whether the current session is acting as a swarm coordinator.
+ * Set when an epic is created or when swarm tools are used.
+ */
+interface CoordinatorContext {
+  /** Whether we're in coordinator mode */
+  isCoordinator: boolean;
+  /** Active epic ID if any */
+  epicId?: string;
+  /** Session ID for event capture */
+  sessionId?: string;
+  /** When coordinator mode was activated */
+  activatedAt?: number;
+}
+
+/** Global coordinator context state */
+let coordinatorContext: CoordinatorContext = {
+  isCoordinator: false,
+};
+
+/**
+ * Set coordinator context
+ * 
+ * Called when swarm coordination begins (e.g., after hive_create_epic or swarm_decompose).
+ * 
+ * @param ctx - Coordinator context to set
+ */
+export function setCoordinatorContext(ctx: Partial<CoordinatorContext>): void {
+  coordinatorContext = {
+    ...coordinatorContext,
+    ...ctx,
+    activatedAt: ctx.isCoordinator ? Date.now() : coordinatorContext.activatedAt,
+  };
+}
+
+/**
+ * Get current coordinator context
+ * 
+ * @returns Current coordinator context state
+ */
+export function getCoordinatorContext(): CoordinatorContext {
+  return { ...coordinatorContext };
+}
+
+/**
+ * Clear coordinator context
+ * 
+ * Called when swarm coordination ends (e.g., epic closed or session ends).
+ */
+export function clearCoordinatorContext(): void {
+  coordinatorContext = {
+    isCoordinator: false,
+  };
+}
+
+/**
+ * Check if we're in coordinator context
+ * 
+ * Returns true if:
+ * 1. Coordinator context was explicitly set
+ * 2. Context was set within the last 4 hours (session timeout)
+ * 
+ * @returns Whether we're currently in coordinator mode
+ */
+export function isInCoordinatorContext(): boolean {
+  if (!coordinatorContext.isCoordinator) {
+    return false;
+  }
+  
+  // Check for session timeout (4 hours)
+  const COORDINATOR_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+  if (coordinatorContext.activatedAt) {
+    const elapsed = Date.now() - coordinatorContext.activatedAt;
+    if (elapsed > COORDINATOR_TIMEOUT_MS) {
+      // Session timed out, clear context
+      clearCoordinatorContext();
+      return false;
+    }
+  }
+  
+  return true;
+}

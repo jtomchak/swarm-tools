@@ -64,7 +64,14 @@ describe("Compaction Hook", () => {
   describe("SWARM_COMPACTION_CONTEXT", () => {
     it("contains coordinator instructions", () => {
       expect(SWARM_COMPACTION_CONTEXT).toContain("COORDINATOR");
-      expect(SWARM_COMPACTION_CONTEXT).toContain("Keep Cooking");
+      expect(SWARM_COMPACTION_CONTEXT).toContain("You Are The COORDINATOR");
+    });
+
+    it("contains prohibition-first anti-patterns", () => {
+      expect(SWARM_COMPACTION_CONTEXT).toContain("NEVER");
+      expect(SWARM_COMPACTION_CONTEXT).toContain("edit");
+      expect(SWARM_COMPACTION_CONTEXT).toContain("write");
+      expect(SWARM_COMPACTION_CONTEXT).toContain("SPAWN A WORKER");
     });
 
     it("contains resume instructions", () => {
