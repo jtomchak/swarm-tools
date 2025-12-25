@@ -226,3 +226,103 @@ export const instructionClarity = createScorer({
     }
   },
 });
+
+// ============================================================================
+// LLM-as-Judge Scorers
+// ============================================================================
+
+/**
+ * LLM-as-judge scorer for decomposition coherence
+ *
+ * Uses Claude Haiku to evaluate whether subtasks are truly independent,
+ * well-scoped, and complete. This catches nuances that heuristics miss:
+ * - Semantic dependencies between subtasks
+ * - Scope that's too big or too trivial
+ * - Missing pieces that would block completion
+ *
+ * Only use for decomposition evals - this is where it matters.
+ */
+export const decompositionCoherence = createScorer({
+  name: "Decomposition Coherence (LLM Judge)",
+  description:
+    "LLM evaluates whether subtasks are truly independent and well-scoped",
+  scorer: async ({ output, input }) => {
+    try {
+      const decomposition =
+        typeof output === "string" ? output : JSON.stringify(output, null, 2);
+
+      // Get original task from input if available
+      const originalTask =
+        typeof input === "object" && input !== null && "task" in input
+          ? String((input as { task: string }).task)
+          : "Unknown task";
+
+      const { text } = await generateText({
+        model: gateway(JUDGE_MODEL),
+        prompt: `You are evaluating a task decomposition for parallel agent execution.
+
+ORIGINAL TASK:
+${originalTask}
+
+DECOMPOSITION:
+${decomposition}
+
+Evaluate on these criteria (be harsh - bad decompositions waste expensive parallel work):
+
+1. INDEPENDENCE (25%): Can subtasks truly run in parallel? Look for:
+   - Shared state dependencies (one writes, another reads)
+   - Ordering requirements hidden in the task descriptions
+   - Shared files that will cause merge conflicts
+
+2. SCOPE (25%): Is each subtask right-sized?
+   - Too big: Should be split further (>2 hours of work)
+   - Too small: Trivial tasks that waste agent spawn overhead
+   - Goldilocks: 30min-2hr of focused work
+
+3. COMPLETENESS (25%): Does the sum equal the whole?
+   - Missing pieces that would leave the task incomplete
+   - Gaps between subtasks (who handles X?)
+   - Implicit work not captured in any subtask
+
+4. CLARITY (25%): Would an agent know what to do?
+   - Vague descriptions that invite interpretation
+   - Missing context needed to start work
+   - Ambiguous boundaries between subtasks
+
+Return ONLY valid JSON (no markdown, no explanation):
+{"score": <0-100>, "issues": ["issue1", "issue2"], "strengths": ["strength1"]}`,
+        maxOutputTokens: 512,
+      });
+
+      // Parse JSON response - handle potential markdown wrapping
+      let jsonText = text.trim();
+      if (jsonText.startsWith("```")) {
+        jsonText = jsonText.replace(/```json?\n?/g, "").replace(/```$/g, "");
+      }
+
+      const result = JSON.parse(jsonText) as {
+        score: number;
+        issues: string[];
+        strengths?: string[];
+      };
+
+      const issueText =
+        result.issues.length > 0 ? result.issues.join("; ") : "No issues";
+      const strengthText =
+        result.strengths && result.strengths.length > 0
+          ? ` | Strengths: ${result.strengths.join("; ")}`
+          : "";
+
+      return {
+        score: result.score / 100,
+        message: `${issueText}${strengthText}`,
+      };
+    } catch (error) {
+      // Don't fail the eval if judge fails - return neutral score
+      return {
+        score: 0.5,
+        message: `LLM judge error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  },
+});

@@ -19,6 +19,7 @@ import {
   subtaskIndependence,
   coverageCompleteness,
   instructionClarity,
+  decompositionCoherence,
 } from "./scorers/index.js";
 import { decompositionCases } from "./fixtures/decomposition-cases.js";
 import {
@@ -82,7 +83,13 @@ evalite("Swarm Decomposition Quality", {
   },
 
   // Scorers evaluate decomposition quality
-  scorers: [subtaskIndependence, coverageCompleteness, instructionClarity],
+  // decompositionCoherence uses LLM-as-judge for nuanced evaluation
+  scorers: [
+    subtaskIndependence,
+    coverageCompleteness,
+    instructionClarity,
+    decompositionCoherence,
+  ],
 });
 
 /**
@@ -108,5 +115,5 @@ evalite("Decomposition Edge Cases", {
     return extractJson(response);
   },
 
-  scorers: [subtaskIndependence, coverageCompleteness],
+  scorers: [subtaskIndependence, coverageCompleteness, decompositionCoherence],
 });
