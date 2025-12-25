@@ -16,6 +16,18 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Ollama
+        uses: ai-action/setup-ollama@v2
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama
+          key: ${{ runner.os }}-ollama-mxbai-embed-large
+
+      - name: Pull embedding model
+        run: ollama pull mxbai-embed-large
+
       - name: Install dependencies
         run: bun install
 
@@ -26,8 +38,7 @@ jobs:
         run: bun turbo test
         env:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
-        # Integration tests skipped in CI - PGLite WASM has issues in GitHub Actions
-        # Run locally with: bun run test:integration
+          OLLAMA_HOST: http://localhost:11434
 
       - name: Run eval gates
         id: evals
