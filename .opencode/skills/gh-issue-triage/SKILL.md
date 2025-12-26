@@ -48,7 +48,13 @@ tags:
 │  2. GET CONTRIBUTOR PROFILE                 │
 │     gh api users/<login>                    │
 │     → twitter_username, blog, bio, name     │
-│     → Store for changeset credits           │
+│     → Store in semantic-memory for credits  │
+│     semantic-memory_store(                  │
+│       information="Contributor @{login}:    │
+│         {name} (@{twitter} on Twitter).     │
+│         Filed issue #{number}. Bio: {bio}", │
+│       tags="contributor,{login},issue-{#}"  │
+│     )                                       │
 │                                             │
 │  3. ANALYZE                                 │
 │     → Is it a bug? Feature? Question?       │
@@ -102,8 +108,12 @@ bun run scripts/issue-summary.ts <owner/repo> <number>
 # Returns: title, body, author, state, labels, url
 
 # Get contributor profile (includes Twitter!)
-bun run scripts/get-contributor.ts <login>
-# Returns: name, twitter_username, blog, bio, avatar_url
+bun run scripts/get-contributor.ts <login> [issue-number]
+# Example: bun run scripts/get-contributor.ts justBCheung 42
+# Returns:
+#   - Profile details (name, twitter_username, blog, bio, avatar_url)
+#   - Ready-to-paste changeset credit: "Thanks to Brian Cheung ([@justBCheung]...)"
+#   - Ready-to-paste semantic-memory_store command
 ```
 
 ## Quick Triage Pattern
@@ -118,8 +128,11 @@ const issue = await getIssueSummary("owner/repo", 42);
 // 2. Get contributor profile
 const contributor = await getContributor(issue.author.login);
 
-// 3. Store contributor for later credit
-// (Twitter handle: contributor.twitter_username)
+// 3. Store contributor in semantic-memory for future credits
+semantic-memory_store({
+  information: `Contributor @${contributor.login}: ${contributor.name || contributor.login} ${contributor.twitter_username ? `(@${contributor.twitter_username} on Twitter)` : ''}. Filed issue #42. Bio: '${contributor.bio || 'N/A'}'`,
+  tags: `contributor,${contributor.login},issue-42`
+});
 
 // 4. Analyze and decide
 if (issue.body.includes("TypeError") && issue.body.includes("steps to reproduce")) {
@@ -167,7 +180,7 @@ This is actually expected behavior because [reason]. If you're trying to [X], he
 
 ## Changeset Credit Templates
 
-**With Twitter handle:**
+**With name AND Twitter handle (PREFERRED):**
 ```markdown
 ---
 "package-name": patch
@@ -175,10 +188,10 @@ This is actually expected behavior because [reason]. If you're trying to [X], he
 
 Fixed [bug description]
 
-Thanks @twitter_username for the report!
+Thanks to [Name] ([@twitter_username](https://x.com/twitter_username)) for the report!
 ```
 
-**Without Twitter (use name + blog):**
+**With Twitter handle only (no name):**
 ```markdown
 ---
 "package-name": patch
@@ -186,10 +199,10 @@ Thanks @twitter_username for the report!
 
 Fixed [bug description]
 
-Thanks [Name] ([blog URL]) for the report!
+Thanks to [@twitter_username](https://x.com/twitter_username) for the report!
 ```
 
-**Without any profile info:**
+**With name only (no Twitter):**
 ```markdown
 ---
 "package-name": patch
@@ -197,8 +210,21 @@ Thanks [Name] ([blog URL]) for the report!
 
 Fixed [bug description]
 
-Thanks @github_username for the report!
+Thanks to [Name] (@github_username on GitHub) for the report!
 ```
+
+**GitHub username only (no name, no Twitter):**
+```markdown
+---
+"package-name": patch
+---
+
+Fixed [bug description]
+
+Thanks to @github_username for the report!
+```
+
+**Why include both name and Twitter?** Names are human, Twitter handles enable engagement. "Thanks to Brian Cheung ([@justBCheung](https://x.com/justBCheung))" gives credit AND makes it easy to tag them when tweeting the release.
 
 ## Profile Extraction
 

@@ -4,8 +4,13 @@
  * Fetch GitHub contributor profile including Twitter handle
  * 
  * Usage:
- *   bun run get-contributor.ts <login>
- *   bun run get-contributor.ts bcheung
+ *   bun run get-contributor.ts <login> [issue-number]
+ *   bun run get-contributor.ts bcheung 42
+ * 
+ * Outputs:
+ *   1. Contributor profile details
+ *   2. Ready-to-paste changeset credit line (name + Twitter link)
+ *   3. Ready-to-paste semantic-memory_store command
  * 
  * Returns JSON with:
  *   - login (GitHub username)
@@ -56,29 +61,56 @@ function formatOutput(user: GitHubUser): string {
   return parts.join("\n");
 }
 
-function formatForChangeset(user: GitHubUser): string {
+function formatForChangeset(user: GitHubUser, issueNumber?: number): string {
+  // PREFERRED: Full name + Twitter (best for engagement)
+  if (user.name && user.twitter_username) {
+    const issue = issueNumber ? `reporting #${issueNumber}` : 'the report';
+    return `Thanks to ${user.name} ([@${user.twitter_username}](https://x.com/${user.twitter_username})) for ${issue}!`;
+  }
+  
+  // Twitter only (no name available)
   if (user.twitter_username) {
-    return `Thanks @${user.twitter_username} for the report!`;
+    const issue = issueNumber ? `reporting #${issueNumber}` : 'the report';
+    return `Thanks to [@${user.twitter_username}](https://x.com/${user.twitter_username}) for ${issue}!`;
   }
   
-  if (user.name && user.blog) {
-    return `Thanks ${user.name} (${user.blog}) for the report!`;
-  }
-  
+  // Name only (no Twitter)
   if (user.name) {
-    return `Thanks ${user.name} (@${user.login}) for the report!`;
+    const issue = issueNumber ? `reporting #${issueNumber}` : 'the report';
+    return `Thanks to ${user.name} (@${user.login} on GitHub) for ${issue}!`;
   }
   
-  return `Thanks @${user.login} for the report!`;
+  // Fallback: GitHub username only
+  const issue = issueNumber ? `reporting #${issueNumber}` : 'the report';
+  return `Thanks to @${user.login} for ${issue}!`;
+}
+
+function formatSemanticMemoryStore(user: GitHubUser, issueNumber?: number): string {
+  const twitterPart = user.twitter_username ? ` (@${user.twitter_username} on Twitter)` : '';
+  const issuePart = issueNumber ? `. Filed issue #${issueNumber}` : '';
+  const bioPart = user.bio ? `. Bio: '${user.bio}'` : '';
+  
+  const tags = ['contributor', user.login, issueNumber ? `issue-${issueNumber}` : null]
+    .filter(Boolean)
+    .join(',');
+  
+  return `semantic-memory_store(
+  information: "Contributor @${user.login}: ${user.name || user.login}${twitterPart}${issuePart}${bioPart}",
+  tags: "${tags}"
+)`;
 }
 
 // CLI
 if (import.meta.main) {
-  const [login] = Bun.argv.slice(2);
+  const args = Bun.argv.slice(2);
+  const [login, issueNumberArg] = args.filter(arg => !arg.startsWith('--'));
+  const issueNumber = issueNumberArg ? parseInt(issueNumberArg, 10) : undefined;
   
   if (!login) {
-    console.error("Usage: bun run get-contributor.ts <login>");
-    console.error("Example: bun run get-contributor.ts bcheung");
+    console.error("Usage: bun run get-contributor.ts <login> [issue-number]");
+    console.error("Example: bun run get-contributor.ts bcheung 42");
+    console.error("\nOptions:");
+    console.error("  --json    Include JSON output");
     process.exit(1);
   }
   
@@ -88,7 +120,9 @@ if (import.meta.main) {
     console.log("\n📝 Contributor Profile\n");
     console.log(formatOutput(user));
     console.log("\n✨ Changeset Credit (copy/paste)\n");
-    console.log(formatForChangeset(user));
+    console.log(formatForChangeset(user, issueNumber));
+    console.log("\n🧠 Semantic Memory Store (copy/paste)\n");
+    console.log(formatSemanticMemoryStore(user, issueNumber));
     console.log();
     
     // Also output JSON for programmatic use
@@ -104,4 +138,4 @@ if (import.meta.main) {
   }
 }
 
-export { getContributor, formatForChangeset, type GitHubUser };
+export { getContributor, formatForChangeset, formatSemanticMemoryStore, type GitHubUser };
