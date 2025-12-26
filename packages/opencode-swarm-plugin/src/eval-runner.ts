@@ -207,7 +207,7 @@ export async function runEvals(
     await runEvalite({
       path: evalPath, // undefined = run all
       cwd: projectRoot, // Use project root as working directory
-      mode: "run-once",
+      mode: "run-once-and-exit",
       scoreThreshold,
       outputPath,
       hideTable: true, // Suppress terminal output
@@ -240,20 +240,20 @@ export async function runEvals(
       });
     }
 
-    // Transform to structured result
-    const suites: SuiteResult[] = output.suites.map((suite) => ({
-      name: suite.name,
-      filepath: suite.filepath,
-      status: suite.status,
-      duration: suite.duration,
-      averageScore: suite.averageScore,
-      evalCount: suite.evals.length,
+    // Transform to structured result (evalite v1.0 API: output.evals with results)
+    const suites: SuiteResult[] = output.evals.map((evalItem: Evalite.Exported.Eval) => ({
+      name: evalItem.name,
+      filepath: evalItem.filepath,
+      status: evalItem.status,
+      duration: evalItem.duration,
+      averageScore: evalItem.averageScore,
+      evalCount: evalItem.results.length,
       // Include evals if user wants detailed results
-      evals: suite.evals.map((e) => ({
-        input: e.input,
-        output: e.output,
-        expected: e.expected,
-        scores: e.scores.map((s) => ({
+      evals: evalItem.results.map((r: Evalite.Exported.Result) => ({
+        input: r.input,
+        output: r.output,
+        expected: r.expected,
+        scores: r.scores.map((s: Evalite.Exported.Score) => ({
           name: s.name,
           score: s.score,
           description: s.description,
