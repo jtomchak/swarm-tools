@@ -32,6 +32,10 @@ const EXTERNALS = [
   "@electric-sql/pglite",
   "swarm-mail",
   "evalite",  // dev-only, shouldn't be in production bundle
+  "@clack/prompts",  // unicode detection must happen at runtime, not bundle time
+  "@clack/core",
+  "picocolors",
+  "sisteransi",
 ];
 
 async function buildEntry(entry: BuildEntry): Promise<void> {
