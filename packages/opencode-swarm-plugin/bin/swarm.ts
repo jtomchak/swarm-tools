@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -1512,7 +1513,8 @@ async function doctor() {
   }
 
   // Project skills (check current directory)
-  const projectSkillsDirs = [".opencode/skills", ".claude/skills", "skills"];
+  // OpenCode uses singular "skill", Claude uses plural "skills"
+  const projectSkillsDirs = [".opencode/skill", ".claude/skills", "skill"];
   for (const dir of projectSkillsDirs) {
     if (existsSync(dir)) {
       try {
@@ -2107,9 +2109,21 @@ async function setup(forceReinstall = false, nonInteractive = false) {
   // Track file operation statistics
   const stats: FileStats = { created: 0, updated: 0, unchanged: 0 };
 
+  // Migrate legacy "skills" → "skill" for OpenCode compatibility
+  const legacySkillsDir = join(configDir, "skills");
+  const skillsDir = join(configDir, "skill");
+  if (existsSync(legacySkillsDir) && !existsSync(skillsDir)) {
+    p.log.step("Migrating skills directory...");
+    try {
+      renameSync(legacySkillsDir, skillsDir);
+      p.log.message(dim(`  Renamed: ${legacySkillsDir} → ${skillsDir}`));
+    } catch (err) {
+      p.log.warn(`Could not migrate skills directory: ${err}`);
+    }
+  }
+
   // Create directories if needed
   p.log.step("Creating configuration directories...");
-  const skillsDir = join(configDir, "skills");
   for (const dir of [pluginDir, commandDir, agentDir, swarmAgentDir, skillsDir]) {
     mkdirWithStatus(dir);
   }
@@ -2145,7 +2159,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
     }
   }
 
-  // If the user keeps their skills in ~/.config/opencode/skills, offer to sync the bundled set
+  // If the user keeps their skills in ~/.config/opencode/skill, offer to sync the bundled set
   if (bundledSkills.length > 0) {
     const globalSkills = listDirectoryNames(skillsDir);
     const managedBundled = globalSkills.filter((name) =>
@@ -2361,12 +2375,12 @@ async function init() {
 
     // Offer to create project skills directory
     const createSkillsDir = await p.confirm({
-      message: "Create project skills directory (.opencode/skills/)?",
+      message: "Create project skills directory (.opencode/skill/)?",
       initialValue: false,
     });
 
     if (!p.isCancel(createSkillsDir) && createSkillsDir) {
-      const skillsPath = ".opencode/skills";
+      const skillsPath = ".opencode/skill";
       if (!existsSync(skillsPath)) {
         mkdirSync(skillsPath, { recursive: true });
         p.log.success("Created " + skillsPath + "/");
@@ -2470,9 +2484,9 @@ function config() {
 
   // Project skills locations
   console.log(`  📁 Project skills locations ${dim("(checked in order)")}`);
-  console.log(`     ${dim(".opencode/skills/")}`);
-  console.log(`     ${dim(".claude/skills/")}`);
-  console.log(`     ${dim("skills/")}`);
+  console.log(`     ${dim(".opencode/skill/")}`);
+  console.log(`     ${dim(".claude/skills/")}`);  // Claude uses plural
+  console.log(`     ${dim("skill/")}`);
   console.log();
 
   // Bundled skills info

@@ -52,12 +52,21 @@ async function buildEntry(entry: BuildEntry): Promise<void> {
   }
 }
 
+import { cpSync, mkdirSync } from "fs";
+import { join } from "path";
+
 async function main() {
   console.log("🔨 Building opencode-swarm-plugin...\n");
   const start = Date.now();
   
+  // Phase 0: Copy examples to dist (for CLI to find templates)
+  console.log("📋 Copying examples to dist...");
+  mkdirSync("./dist/examples", { recursive: true });
+  cpSync("./examples/plugin-wrapper-template.ts", "./dist/examples/plugin-wrapper-template.ts");
+  console.log("   Copied plugin-wrapper-template.ts");
+  
   // Phase 1: Build library entries in parallel
-  console.log("📦 Phase 1: Building library entries...");
+  console.log("\n📦 Phase 1: Building library entries...");
   const libraryResults = await Promise.allSettled(
     LIBRARY_ENTRIES.map(entry => buildEntry(entry))
   );

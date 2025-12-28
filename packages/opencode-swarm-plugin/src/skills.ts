@@ -237,10 +237,11 @@ function validateSkillMetadata(
 /**
  * Skill discovery locations relative to project root (checked first)
  */
+// OpenCode uses singular "skill", Claude uses plural "skills"
 const PROJECT_SKILL_DIRECTORIES = [
-  ".opencode/skills",
-  ".claude/skills",
-  "skills",
+  ".opencode/skill",   // OpenCode native
+  ".claude/skills",    // Claude Code (uses plural)
+  "skill",             // Simple projects
 ] as const;
 
 /**
@@ -248,7 +249,7 @@ const PROJECT_SKILL_DIRECTORIES = [
  */
 function getGlobalSkillsDir(): string {
   const home = process.env.HOME || process.env.USERPROFILE || "~";
-  return join(home, ".config", "opencode", "skills");
+  return join(home, ".config", "opencode", "skill");
 }
 
 /**
@@ -256,7 +257,7 @@ function getGlobalSkillsDir(): string {
  */
 function getClaudeGlobalSkillsDir(): string {
   const home = process.env.HOME || process.env.USERPROFILE || "~";
-  return join(home, ".claude", "skills");
+  return join(home, ".claude", "skills"); // Claude uses plural
 }
 
 /**
@@ -527,7 +528,7 @@ If the skill has scripts, you can run them with skills_execute.`,
 
     // Determine skill source
     let skillSource: "global" | "project" | "bundled" = "project";
-    if (skill.path.includes(".config/opencode/skills") || skill.path.includes(".claude/skills")) {
+    if (skill.path.includes(".config/opencode/skill") || skill.path.includes(".claude/skills")) {
       skillSource = "global";
     } else if (skill.path.includes("global-skills")) {
       skillSource = "bundled";
@@ -706,7 +707,7 @@ Use this to access supplementary skill resources.`,
 /**
  * Default skills directory for new skills
  */
-const DEFAULT_SKILLS_DIR = ".opencode/skills";
+const DEFAULT_SKILLS_DIR = ".opencode/skill";
 
 // =============================================================================
 // CSO (Claude Search Optimization) Validation
@@ -972,15 +973,15 @@ Good skills have:
       .describe("Tools this skill commonly uses"),
     directory: tool.schema
       .enum([
-        ".opencode/skills",
+        ".opencode/skill",
         ".claude/skills",
-        "skills",
+        "skill",
         "global",
         "global-claude",
       ])
       .optional()
       .describe(
-        "Where to create the skill (default: .opencode/skills). Use 'global' for ~/.config/opencode/skills/, 'global-claude' for ~/.claude/skills/",
+        "Where to create the skill (default: .opencode/skill). Use 'global' for ~/.config/opencode/skill/, 'global-claude' for ~/.claude/skills/",
       ),
   },
   async execute(args) {
