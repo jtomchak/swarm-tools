@@ -51,6 +51,7 @@ import { observabilityTools } from "./observability-tools";
 import { researchTools } from "./swarm-research";
 import { evalTools } from "./eval-runner";
 import { contributorTools } from "./contributor-tools";
+import { cassTools } from "./cass-tools";
 import {
   guardrailOutput,
   DEFAULT_GUARDRAIL_CONFIG,
@@ -521,6 +522,7 @@ export const allTools = {
   ...memoryTools,
   ...observabilityTools,
   ...contributorTools,
+  ...cassTools,
 } as const;
 
 /**
@@ -1004,3 +1006,25 @@ export {
   type SubtaskStatus,
   type EpicState,
 } from "./swarm-signature";
+
+/**
+ * Re-export CASS tools module
+ *
+ * Cross-Agent Session Search - search across all AI coding agent histories.
+ * Wraps the external `cass` CLI from Dicklesworthstone's repo.
+ *
+ * Includes:
+ * - cassTools - All CASS tools (search, view, expand, health, index, stats)
+ * - cass_search - Search across agent histories
+ * - cass_view - View specific session
+ * - cass_expand - Expand context around a line
+ * - cass_health - Check index health
+ * - cass_index - Build/rebuild index
+ * - cass_stats - Show index statistics
+ *
+ * Events emitted:
+ * - cass_searched - When a search is performed
+ * - cass_viewed - When a session is viewed
+ * - cass_indexed - When the index is built/rebuilt
+ */
+export { cassTools } from "./cass-tools";

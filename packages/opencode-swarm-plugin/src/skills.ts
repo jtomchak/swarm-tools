@@ -37,6 +37,7 @@ import {
 } from "path";
 import { fileURLToPath } from "url";
 import matter from "gray-matter";
+import { getSwarmMailLibSQL, createEvent } from "swarm-mail";
 
 // =============================================================================
 // Types
@@ -93,6 +94,58 @@ let skillsProjectDirectory: string = process.cwd();
 
 /** Cached discovered skills (lazy-loaded) */
 let skillsCache: Map<string, Skill> | null = null;
+
+/**
+ * Emit skill_loaded event
+ */
+async function emitSkillLoadedEvent(data: {
+  skill_name: string;
+  skill_source: "global" | "project" | "bundled";
+  context_provided?: boolean;
+  content_length?: number;
+}): Promise<void> {
+  try {
+    const projectPath = skillsProjectDirectory;
+    const swarmMail = await getSwarmMailLibSQL(projectPath);
+
+    const event = createEvent("skill_loaded", {
+      project_key: projectPath,
+      skill_name: data.skill_name,
+      skill_source: data.skill_source,
+      context_provided: data.context_provided,
+      content_length: data.content_length,
+    });
+
+    await swarmMail.appendEvent(event);
+  } catch {
+    // Silently fail event emission - don't break the tool
+  }
+}
+
+/**
+ * Emit skill_created event
+ */
+async function emitSkillCreatedEvent(data: {
+  skill_name: string;
+  skill_scope: "global" | "project";
+  description?: string;
+}): Promise<void> {
+  try {
+    const projectPath = skillsProjectDirectory;
+    const swarmMail = await getSwarmMailLibSQL(projectPath);
+
+    const event = createEvent("skill_created", {
+      project_key: projectPath,
+      skill_name: data.skill_name,
+      skill_scope: data.skill_scope,
+      description: data.description,
+    });
+
+    await swarmMail.appendEvent(event);
+  } catch {
+    // Silently fail event emission - don't break the tool
+  }
+}
 
 /**
  * Set the project directory for skill discovery
@@ -471,6 +524,22 @@ If the skill has scripts, you can run them with skills_execute.`,
       const names = available.map((s) => s.name).join(", ");
       return `Skill '${args.name}' not found. Available skills: ${names || "none"}`;
     }
+
+    // Determine skill source
+    let skillSource: "global" | "project" | "bundled" = "project";
+    if (skill.path.includes(".config/opencode/skills") || skill.path.includes(".claude/skills")) {
+      skillSource = "global";
+    } else if (skill.path.includes("global-skills")) {
+      skillSource = "bundled";
+    }
+
+    // Emit skill_loaded event
+    await emitSkillLoadedEvent({
+      skill_name: skill.metadata.name,
+      skill_source: skillSource,
+      context_provided: true,
+      content_length: skill.body.length,
+    });
 
     const includeScripts = args.include_scripts !== false;
     let output = `# Skill: ${skill.metadata.name}\n\n`;
@@ -953,6 +1022,19 @@ Good skills have:
       // Invalidate cache so new skill is discoverable
       invalidateSkillsCache();
 
+      // Determine skill scope
+      const skillScope: "global" | "project" = 
+        args.directory === "global" || args.directory === "global-claude" 
+          ? "global" 
+          : "project";
+
+      // Emit skill_created event
+      await emitSkillCreatedEvent({
+        skill_name: args.name,
+        skill_scope: skillScope,
+        description: args.description,
+      });
+
       // Build response with CSO warnings if present
       const response: Record<string, unknown> = {
         success: true,
@@ -1421,6 +1503,16 @@ echo "Project directory: \$1"
 
       // Invalidate cache
       invalidateSkillsCache();
+
+      // Determine skill scope
+      const skillScope: "global" | "project" = args.directory === "global" ? "global" : "project";
+
+      // Emit skill_created event
+      await emitSkillCreatedEvent({
+        skill_name: args.name,
+        skill_scope: skillScope,
+        description: args.description || "[TODO: Complete description]",
+      });
 
       return JSON.stringify(
         {
