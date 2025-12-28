@@ -16,8 +16,7 @@
  */
 
 import { evalite } from "evalite";
-import { createInMemorySwarmMail } from "swarm-mail";
-import { createMemoryAdapter } from "swarm-mail";
+import { createInMemoryDb, createMemoryAdapter } from "swarm-mail";
 import { smartOperationCases } from "./fixtures/smart-operations-fixtures.js";
 import { smartOperationQuality } from "./scorers/smart-operations-scorer.js";
 
@@ -40,9 +39,8 @@ evalite("Smart Memory Operations", {
 
   // Task: set up in-memory DB, seed existing memories, call upsert()
   task: async (input) => {
-    // Create in-memory swarm mail instance
-    const swarmMail = await createInMemorySwarmMail("smart-ops-eval");
-    const db = swarmMail.getDrizzle();
+    // Create in-memory database
+    const db = await createInMemoryDb();
 
     // Create memory adapter with Ollama config
     const adapter = createMemoryAdapter(db, {
@@ -66,9 +64,6 @@ evalite("Smart Memory Operations", {
     const result = await adapter.upsert(input.newInformation, {
       useSmartOps: true,
     });
-
-    // Clean up
-    await swarmMail.close();
 
     // Return result for scoring
     return {
@@ -128,8 +123,7 @@ evalite("Smart Operations Edge Cases", {
   ],
 
   task: async (input) => {
-    const swarmMail = await createInMemorySwarmMail("smart-ops-edge-eval");
-    const db = swarmMail.getDrizzle();
+    const db = await createInMemoryDb();
 
     const adapter = createMemoryAdapter(db, {
       ollamaHost: process.env.OLLAMA_HOST || "http://localhost:11434",
@@ -150,8 +144,6 @@ evalite("Smart Operations Edge Cases", {
     const result = await adapter.upsert(input.newInformation, {
       useSmartOps: true,
     });
-
-    await swarmMail.close();
 
     return {
       operation: result.operation,
