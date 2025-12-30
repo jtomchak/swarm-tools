@@ -3216,6 +3216,7 @@ ${cyan("Commands:")}
   swarm viz       Alias for 'swarm serve' (deprecated, use serve)
     --port <n>          Port to listen on (default: 4483)
   swarm cells     List or get cells from database (replaces 'swarm tool hive_query')
+  swarm memory    Manage unified memory system (learnings + sessions)
   swarm log       View swarm logs with filtering
   swarm stats     Show swarm health metrics powered by swarm-insights (strategy success rates, patterns)
   swarm o11y      Show observability health - hook coverage, event capture, session quality
@@ -3242,6 +3243,17 @@ ${cyan("Cell Management:")}
   swarm cells --type <type>            Filter by type (task, bug, feature, epic, chore)
   swarm cells --ready                  Show next ready (unblocked) cell
   swarm cells --json                   Raw JSON output (array, no wrapper)
+
+${cyan("Memory Management (Hivemind):")}
+  swarm memory store <info> [--tags <tags>]    Store a learning/memory
+  swarm memory find <query> [--limit <n>]      Search all memories (semantic + FTS)
+  swarm memory get <id>                        Get specific memory by ID
+  swarm memory remove <id>                     Delete outdated/incorrect memory
+  swarm memory validate <id>                   Confirm accuracy (resets 90-day decay)
+  swarm memory stats                           Show database statistics
+  swarm memory index                           Index AI sessions (use hivemind_index tool)
+  swarm memory sync                            Sync to .hive/memories.jsonl (use hivemind_sync tool)
+  swarm memory <command> --json                Output JSON for all commands
 
 ${cyan("Log Viewing:")}
   swarm log                            Tail recent logs (last 50 lines)
@@ -5504,6 +5516,319 @@ async function capture() {
 }
 
 // ============================================================================
+// Memory Commands
+// ============================================================================
+
+/**
+ * Parse args for memory commands
+ */
+function parseMemoryArgs(subcommand: string, args: string[]): {
+  json: boolean;
+  info?: string;
+  query?: string;
+  id?: string;
+  tags?: string;
+  limit?: number;
+  collection?: string;
+} {
+  let json = false;
+  let info: string | undefined;
+  let query: string | undefined;
+  let id: string | undefined;
+  let tags: string | undefined;
+  let limit: number | undefined;
+  let collection: string | undefined;
+
+  // First positional arg for store/find/get/remove/validate
+  if (args.length > 0 && !args[0].startsWith("--")) {
+    if (subcommand === "store") {
+      info = args[0];
+    } else if (subcommand === "find") {
+      query = args[0];
+    } else if (subcommand === "get" || subcommand === "remove" || subcommand === "validate") {
+      id = args[0];
+    }
+  }
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--json") {
+      json = true;
+    } else if (arg === "--tags" && i + 1 < args.length) {
+      tags = args[++i];
+    } else if (arg === "--limit" && i + 1 < args.length) {
+      const val = parseInt(args[++i], 10);
+      if (!isNaN(val)) limit = val;
+    } else if (arg === "--collection" && i + 1 < args.length) {
+      collection = args[++i];
+    }
+  }
+
+  return { json, info, query, id, tags, limit, collection };
+}
+
+/**
+ * Memory command - unified interface to memory operations
+ * 
+ * Commands:
+ *   swarm memory store <info> [--tags <tags>]
+ *   swarm memory find <query> [--limit <n>] [--collection <name>]
+ *   swarm memory get <id>
+ *   swarm memory remove <id>
+ *   swarm memory validate <id>
+ *   swarm memory stats
+ *   swarm memory index
+ *   swarm memory sync
+ */
+async function memory() {
+  const subcommand = process.argv[3];
+  const args = process.argv.slice(4);
+  const parsed = parseMemoryArgs(subcommand, args);
+
+  // Get project path for libSQL database
+  const projectPath = process.cwd();
+
+  try {
+    // Get database instance using getDb from swarm-mail
+    // This returns a drizzle instance (SwarmDb) that memory adapter expects
+    const { getDb } = await import("swarm-mail");
+    
+    // Calculate DB path (same logic as libsql.convenience.ts)
+    const tempDirName = getLibSQLProjectTempDirName(projectPath);
+    const tempDir = join(tmpdir(), tempDirName);
+    
+    // Ensure temp directory exists
+    if (!existsSync(tempDir)) {
+      mkdirSync(tempDir, { recursive: true });
+    }
+    
+    const dbPath = join(tempDir, "streams.db");
+    
+    // Convert to file:// URL (required by libSQL)
+    const dbUrl = `file://${dbPath}`;
+    
+    const db = await getDb(dbUrl);
+    
+    // Create memory adapter with default Ollama config
+    const { createMemoryAdapter } = await import("swarm-mail");
+    const adapter = createMemoryAdapter(db, {
+      ollamaHost: process.env.OLLAMA_HOST || "http://localhost:11434",
+      ollamaModel: process.env.OLLAMA_MODEL || "mxbai-embed-large",
+    });
+
+    switch (subcommand) {
+      case "store": {
+        if (!parsed.info) {
+          console.error("Usage: swarm memory store <information> [--tags <tags>]");
+          process.exit(1);
+        }
+
+        const result = await adapter.store(parsed.info, {
+          tags: parsed.tags,
+          collection: parsed.collection || "default",
+        });
+
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true, id: result.id }));
+        } else {
+          p.intro("swarm memory store");
+          p.log.success(`Stored memory: ${result.id}`);
+          if (result.autoTags) {
+            p.log.message(`Auto-tags: ${result.autoTags.tags.join(", ")}`);
+          }
+          p.outro("Done");
+        }
+        break;
+      }
+
+      case "find": {
+        if (!parsed.query) {
+          console.error("Usage: swarm memory find <query> [--limit <n>] [--collection <name>]");
+          process.exit(1);
+        }
+
+        const results = await adapter.find(parsed.query, {
+          limit: parsed.limit || 10,
+          collection: parsed.collection,
+        });
+
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true, results }));
+        } else {
+          p.intro(`swarm memory find: "${parsed.query}"`);
+          if (results.length === 0) {
+            p.log.warn("No memories found");
+          } else {
+            for (const result of results) {
+              console.log();
+              console.log(cyan(`[${result.memory.id}] Score: ${result.score.toFixed(3)}`));
+              console.log(dim(`  Created: ${new Date(result.memory.createdAt).toLocaleDateString()}`));
+              console.log(`  ${result.memory.content.slice(0, 200)}${result.memory.content.length > 200 ? "..." : ""}`);
+              if (result.memory.metadata.tags) {
+                console.log(dim(`  Tags: ${(result.memory.metadata.tags as string[]).join(", ")}`));
+              }
+            }
+          }
+          p.outro(`Found ${results.length} result(s)`);
+        }
+        break;
+      }
+
+      case "get": {
+        if (!parsed.id) {
+          console.error("Usage: swarm memory get <id>");
+          process.exit(1);
+        }
+
+        const memory = await adapter.get(parsed.id);
+
+        if (parsed.json) {
+          if (memory) {
+            console.log(JSON.stringify({ success: true, memory }));
+          } else {
+            console.log(JSON.stringify({ success: false, error: "Memory not found" }));
+            process.exit(1);
+          }
+        } else {
+          p.intro(`swarm memory get: ${parsed.id}`);
+          if (!memory) {
+            p.log.error("Memory not found");
+            p.outro("Aborted");
+            process.exit(1);
+          } else {
+            console.log();
+            console.log(cyan("Content:"));
+            console.log(memory.content);
+            console.log();
+            console.log(dim(`Created: ${new Date(memory.createdAt).toLocaleDateString()}`));
+            console.log(dim(`Collection: ${memory.collection}`));
+            console.log(dim(`Confidence: ${memory.confidence ?? 0.7}`));
+            if (memory.metadata.tags) {
+              console.log(dim(`Tags: ${(memory.metadata.tags as string[]).join(", ")}`));
+            }
+            p.outro("Done");
+          }
+        }
+        break;
+      }
+
+      case "remove": {
+        if (!parsed.id) {
+          console.error("Usage: swarm memory remove <id>");
+          process.exit(1);
+        }
+
+        await adapter.remove(parsed.id);
+
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true }));
+        } else {
+          p.intro("swarm memory remove");
+          p.log.success(`Removed memory: ${parsed.id}`);
+          p.outro("Done");
+        }
+        break;
+      }
+
+      case "validate": {
+        if (!parsed.id) {
+          console.error("Usage: swarm memory validate <id>");
+          process.exit(1);
+        }
+
+        await adapter.validate(parsed.id);
+
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true }));
+        } else {
+          p.intro("swarm memory validate");
+          p.log.success(`Validated memory: ${parsed.id} (decay timer reset)`);
+          p.outro("Done");
+        }
+        break;
+      }
+
+      case "stats": {
+        const stats = await adapter.stats();
+
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true, stats }));
+        } else {
+          p.intro("swarm memory stats");
+          console.log();
+          console.log(cyan("Database Statistics:"));
+          console.log(`  Memories: ${stats.memories}`);
+          console.log(`  Embeddings: ${stats.embeddings}`);
+          p.outro("Done");
+        }
+        break;
+      }
+
+      case "index": {
+        // Index is a stub - actual indexing happens via session indexing
+        // which is handled by hivemind_index tool
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true, message: "Use hivemind_index tool for session indexing" }));
+        } else {
+          p.intro("swarm memory index");
+          p.log.message("Session indexing is handled by the hivemind_index tool");
+          p.log.message("Use: swarm tool hivemind_index");
+          p.outro("Done");
+        }
+        break;
+      }
+
+      case "sync": {
+        // Sync is a stub - actual sync happens via .hive/memories.jsonl
+        // which is handled by hivemind_sync tool
+        if (parsed.json) {
+          console.log(JSON.stringify({ success: true, message: "Use hivemind_sync tool for git sync" }));
+        } else {
+          p.intro("swarm memory sync");
+          p.log.message("Memory sync to .hive/memories.jsonl is handled by the hivemind_sync tool");
+          p.log.message("Use: swarm tool hivemind_sync");
+          p.outro("Done");
+        }
+        break;
+      }
+
+      default: {
+        console.error(`Unknown subcommand: ${subcommand}`);
+        console.error("");
+        console.error("Usage: swarm memory <subcommand> [options]");
+        console.error("");
+        console.error("Subcommands:");
+        console.error("  store <info> [--tags <tags>]         Store a memory");
+        console.error("  find <query> [--limit <n>]           Search memories");
+        console.error("  get <id>                             Get memory by ID");
+        console.error("  remove <id>                          Delete memory");
+        console.error("  validate <id>                        Reset decay timer");
+        console.error("  stats                                Show database stats");
+        console.error("  index                                Index sessions (use hivemind_index)");
+        console.error("  sync                                 Sync to git (use hivemind_sync)");
+        console.error("");
+        console.error("Global options:");
+        console.error("  --json                               Output JSON");
+        process.exit(1);
+      }
+    }
+  } catch (error) {
+    if (parsed.json) {
+      console.log(JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      process.exit(1);
+    } else {
+      p.log.error("Memory operation failed");
+      p.log.message(error instanceof Error ? error.message : String(error));
+      p.outro("Aborted");
+      process.exit(1);
+    }
+  }
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -5581,6 +5906,9 @@ switch (command) {
     break;
   case "capture":
     await capture();
+    break;
+  case "memory":
+    await memory();
     break;
   case "query":
     await query();

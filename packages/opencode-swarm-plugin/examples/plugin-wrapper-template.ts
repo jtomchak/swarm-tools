@@ -1402,6 +1402,71 @@ const cass_stats = tool({
 });
 
 // =============================================================================
+// Hivemind Tools (Unified Memory - Sessions + Learnings)
+// =============================================================================
+
+const hivemind_store = tool({
+  description: "Store a memory (learnings, decisions, patterns) with metadata and tags. Include WHY, not just WHAT.",
+  args: {
+    information: tool.schema.string().describe("The learning, decision, or pattern to store (include context and reasoning)"),
+    tags: tool.schema.string().optional().describe("Comma-separated tags for categorization (e.g., 'auth,oauth,tokens')"),
+  },
+  execute: (args, ctx) => execTool("hivemind_store", args, ctx),
+});
+
+const hivemind_find = tool({
+  description: "Search all memories (learnings + sessions) by semantic similarity. Use BEFORE implementing to check if any agent solved it before.",
+  args: {
+    query: tool.schema.string().describe("Search query (e.g., 'token refresh race condition')"),
+    limit: tool.schema.number().optional().describe("Max results to return (default: 5)"),
+    collection: tool.schema.string().optional().describe("Filter by collection: 'default' (learnings), 'claude', 'cursor', etc., or omit for all"),
+  },
+  execute: (args, ctx) => execTool("hivemind_find", args, ctx),
+});
+
+const hivemind_get = tool({
+  description: "Get specific memory by ID",
+  args: {
+    id: tool.schema.string().describe("Memory ID (e.g., 'mem_xyz123')"),
+  },
+  execute: (args, ctx) => execTool("hivemind_get", args, ctx),
+});
+
+const hivemind_remove = tool({
+  description: "Delete outdated/incorrect memory",
+  args: {
+    id: tool.schema.string().describe("Memory ID to remove"),
+  },
+  execute: (args, ctx) => execTool("hivemind_remove", args, ctx),
+});
+
+const hivemind_validate = tool({
+  description: "Confirm memory is still accurate (resets 90-day decay timer)",
+  args: {
+    id: tool.schema.string().describe("Memory ID to validate"),
+  },
+  execute: (args, ctx) => execTool("hivemind_validate", args, ctx),
+});
+
+const hivemind_stats = tool({
+  description: "Memory statistics and health check (documents, chunks, embeddings)",
+  args: {},
+  execute: (args, ctx) => execTool("hivemind_stats", args, ctx),
+});
+
+const hivemind_index = tool({
+  description: "Index AI session directories (automatically indexes ~/.config/opencode/sessions, ~/.cursor-tutor, etc.)",
+  args: {},
+  execute: (args, ctx) => execTool("hivemind_index", args, ctx),
+});
+
+const hivemind_sync = tool({
+  description: "Sync learnings to .hive/memories.jsonl for git-backed team sharing",
+  args: {},
+  execute: (args, ctx) => execTool("hivemind_sync", args, ctx),
+});
+
+// =============================================================================
 // Plugin Export
 // =============================================================================
 
@@ -2573,6 +2638,15 @@ const SwarmPlugin: Plugin = async (
       cass_health,
       cass_index,
       cass_stats,
+      // Hivemind (Unified Memory - Sessions + Learnings)
+      hivemind_store,
+      hivemind_find,
+      hivemind_get,
+      hivemind_remove,
+      hivemind_validate,
+      hivemind_stats,
+      hivemind_index,
+      hivemind_sync,
     },
 
     // Swarm-aware compaction hook with LLM-powered continuation prompts
