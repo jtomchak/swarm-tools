@@ -52,6 +52,7 @@ jobs:
       - name: Generate PR title with AI
         if: steps.changesets_content.outputs.has_changesets == 'true'
         id: pr_title
+        continue-on-error: true
         uses: vercel/ai-action@v2
         with:
           model: "anthropic/claude-haiku-4-5"
@@ -115,6 +116,7 @@ jobs:
       - name: Generate release tweet
         if: steps.changesets.outputs.published == 'true'
         id: tweet
+        continue-on-error: true
         uses: vercel/ai-action@v2
         with:
           model: "anthropic/claude-opus-4-5"
