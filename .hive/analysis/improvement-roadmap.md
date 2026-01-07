@@ -16,22 +16,22 @@ The swarm system is **operationally excellent** (99.6% coordinator compliance, 1
 ├─────────────────────────────────────────────────────────────────┤
 │  Coordinator Discipline:    A  (99.6% compliance)               │
 │  Worker Efficiency:         A  (100% success, 46s avg)          │
-│  Database Health:          D  (98% bloat, broken timestamps)    │
+│  Database Health:          B  (vector index OK, timestamps bad) │
 │  Learning System:          F  (built but not wired)             │
 │                                                                 │
-│  OVERALL GRADE:            C+ (functional but not improving)    │
+│  OVERALL GRADE:            B- (functional but not improving)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Impact of Gaps:**
 - ❌ System doesn't learn from outcomes (feedback loop open)
-- ❌ 1.35GB wasted storage (97% unused vector index)
+- ✅ ~~1.35GB wasted storage~~ **RESOLVED** - vector index is actively used (9,021 memories, 6,783 embeddings)
 - ❌ Cannot query events by time (timestamp format broken)
 - ❌ Conflict hotspot in event-router.ts (9 overlaps)
 - ❌ Pattern maturity never tracked (0 records)
 
 **Cost of Inaction:**
-- Database grows 77 MB/day → 8.3 GB in 90 days (unsustainable)
+- ~~Database grows 77 MB/day~~ Growth is expected for working semantic search
 - Failed patterns persist indefinitely (no anti-pattern detection)
 - Parallel swarms risk conflicts (no coordination on hot files)
 - Manual analysis required forever (no self-improvement)
@@ -91,40 +91,31 @@ await updatePatternMaturity(scored.signals.strategy, outcome);
 
 ---
 
-### 2. 🔴 CRITICAL: Drop Unused Vector Index (Reclaim 1.35GB)
+### 2. ✅ RESOLVED: Vector Index Investigation Complete
 
-**Problem:** Database is 1.4GB but 98% (1.35GB) is a single vector index (`idx_memories_embedding_shadow`) for a table that's EMPTY. Vector extension (`libsql_vector_idx`) not loaded.
+**Original Concern:** Database is 1.4GB with 98% (1.35GB) in vector index - suspected bloat.
+
+**Investigation Result (2026-01-07):** The vector index is **NOT bloat** - it's actively used!
 
 **Evidence:**
-- `memories` table: 0 rows
-- Vector index: 1.35GB
-- Database integrity check: FAILED (libsql_vector_idx function missing)
-- Growth rate: 77 MB/day → 8.3 GB in 90 days
+- `memories` table: **9,021 rows** (not 0 - see quirk below)
+- Embeddings: **6,783** (75% coverage)
+- Semantic search: **Working** via `hivemind_find()`
+- Collections: `opencode-swarm` (6,659), `default` (2,344), others
 
-**Impact:** 
-- Wasted 1.35GB storage (97% of database)
-- Slow startup and high memory usage
-- Unsustainable growth trajectory
+**Root Cause of Confusion:** libSQL vector extension quirk where `COUNT(*)` returns 0 on tables with `F32_BLOB` columns. Using `COUNT(id)` correctly returns 9,021.
 
-**Solution:**
 ```sql
--- Option 1: Drop index if unused
-DROP INDEX IF EXISTS idx_memories_embedding_shadow;
-VACUUM;
+-- WRONG: Returns 0 due to libSQL vector quirk
+SELECT COUNT(*) FROM memories;  -- Returns: 0
 
--- Option 2: If memories are used elsewhere, rebuild properly
--- Check if embeddings are actually needed first
+-- CORRECT: Use column name
+SELECT COUNT(id) FROM memories;  -- Returns: 9,021
 ```
 
-**Investigation Required:**
-1. Confirm memories table is genuinely unused (check Hivemind integration)
-2. If used: Fix vector extension loading OR migrate to alternative search
-3. If unused: Drop index and reclaim 1.35GB
+**Action:** None needed - keep the vector index. Document the quirk in AGENTS.md (done).
 
-**Effort:** 4 hours (investigation + execution)  
-**Benefit:** Database shrinks from 1.4GB → 30MB (97% reduction)  
-**Blockers:** Need to verify memories table usage in Hivemind  
-**Cell Created:** See "Implementation Cells" section below
+**Status:** ✅ CLOSED - No action required
 
 ---
 
@@ -733,7 +724,7 @@ The swarm system has **excellent operational discipline** (99.6% coordinator com
 4. ⏳ Assign developer to Sprint 1
 5. ⏳ Set up monitoring dashboard for validation
 
-**Recommended Start:** Begin with #2 (drop vector index) - 4 hours, immediate 1.35GB savings, unblocks other work.
+**Recommended Start:** Begin with #1 (close learning feedback loop) - 2-3 days, enables system self-improvement. Item #2 (vector index) is now ✅ RESOLVED - no action needed.
 
 ---
 

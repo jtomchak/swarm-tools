@@ -60,13 +60,10 @@ TOP 5 STORAGE CONSUMERS (by bytes):
 | `events` | 2,337 | ~701 bytes | Event sourcing log |
 | `messages` | 187 | ~788 bytes | Agent mail |
 | `decision_traces` | 182 | ~810 bytes | Coordinator decisions |
-| `memories` | 0 | N/A | **Empty despite 1.4GB index!** ⚠️ |
+| `memories` | 9,021 | ~4.6 KB | Semantic memory storage ✅ |
 | `eval_records` | 30 | Variable | Evalite scores |
 
-**ANOMALY DETECTED:** `memories` table is EMPTY, yet `idx_memories_embedding_shadow` (vector index) is 1.35GB. This suggests:
-1. Embeddings were generated but records deleted
-2. Index not cleaned up after deletion
-3. Potential memory leak in vector index
+**NOTE:** The `memories` table initially appeared empty due to a **known libSQL vector extension quirk**: `COUNT(*)` returns 0 on tables with `F32_BLOB` vector columns. Using `COUNT(id)` correctly returns 9,021 rows. The 1.35GB vector index is **actively used** for semantic search with 6,783 embeddings (75% coverage).
 
 ---
 
@@ -173,9 +170,7 @@ TOP 5 STORAGE HOGS (by total bytes):
 - Active period: 18 days (Dec 20 - Jan 7)
 - Growth rate: 1.4 GB / 18 days = **~77 MB/day**
 
-**BUT:** 98% is vector index bloat (anomaly), so operational growth is:
-- Operational data: ~30 MB
-- Operational growth: 30 MB / 18 days = **~1.7 MB/day** (realistic)
+**NOTE:** The 98% vector index is NOT bloat - it's actively used for semantic search with 9,021 memories and 6,783 embeddings. The growth rate is expected for a working vector search system.
 
 ### 90-Day Projections
 
@@ -203,7 +198,7 @@ TOP 5 STORAGE HOGS (by total bytes):
 
 ### Query Performance Concerns
 
-1. **Vector Index Bloat:** 1.35GB index with 0 memories will cause slow startup and high memory usage
+1. ~~**Vector Index Bloat:**~~ **RESOLVED** - The 1.35GB index is actively used. `COUNT(*)` returns 0 due to libSQL vector extension quirk; `COUNT(id)` correctly shows 9,021 memories with 6,783 embeddings.
 2. **Timestamp Format Inconsistency:** 70% of events use `datetime('now')` string - breaks time-based queries and indexes
 3. **No Auto Vacuum:** Deleted data doesn't reclaim space - requires manual `VACUUM`
 4. **Journal Mode: DELETE:** WAL mode would improve write concurrency
@@ -219,8 +214,8 @@ WHERE project_key = ?
   AND timestamp > ? 
 ORDER BY timestamp DESC;
 
--- Likely slow: Full table scan on large vector index
-SELECT * FROM memories WHERE ...;  -- 0 rows but 1.35GB to scan
+-- Vector search is optimized via libsql_vector_idx
+-- Use vector_distance_cos() for semantic similarity queries
 ```
 
 ---
@@ -229,18 +224,16 @@ SELECT * FROM memories WHERE ...;  -- 0 rows but 1.35GB to scan
 
 ### 🔥 CRITICAL (Do Immediately)
 
-1. **Investigate Vector Index Bloat**
-   ```sql
-   -- Check if memories table was truncated without dropping index
-   SELECT COUNT(*) FROM memories;  -- Currently 0
+1. ~~**Investigate Vector Index Bloat**~~ **RESOLVED**
    
-   -- Drop and recreate vector index if unused
-   DROP INDEX IF EXISTS idx_memories_embedding_shadow;
+   **Update (2026-01-07):** Investigation complete. The vector index is NOT bloat - it's actively used:
+   - `memories` table: 9,021 rows (use `COUNT(id)` not `COUNT(*)` due to libSQL vector quirk)
+   - Embeddings: 6,783 (75% coverage)
+   - Semantic search: Working via `hivemind_find()`
    
-   -- Or if used, rebuild:
-   VACUUM;  -- Reclaim 1.35GB
-   ```
-   **Expected Impact:** Database shrinks from 1.4GB → ~30MB (97% reduction)
+   **Known libSQL Quirk:** `COUNT(*)` returns 0 on tables with `F32_BLOB` vector columns. Always use `COUNT(column_name)` instead.
+   
+   **No action needed** - keep the vector index.
 
 2. **Fix Timestamp Format**
    ```sql
@@ -289,9 +282,10 @@ SELECT * FROM memories WHERE ...;  -- 0 rows but 1.35GB to scan
 
 ### 📊 MEDIUM PRIORITY (This Month)
 
-8. **Monitor Memory Table Usage**
-   - If `memories` table stays empty, remove vector index infrastructure
-   - If it's used, investigate why 0 rows but 1.35GB index
+8. ~~**Monitor Memory Table Usage**~~ **RESOLVED**
+   - ✅ Memory table has 9,021 rows (use `COUNT(id)` not `COUNT(*)`)
+   - ✅ Vector index is actively used with 6,783 embeddings
+   - ✅ Semantic search working via `hivemind_find()`
 
 9. **Event Data Normalization**
    - `coordinator_compaction` events average 3.3KB
@@ -315,19 +309,19 @@ SELECT * FROM memories WHERE ...;  -- 0 rows but 1.35GB to scan
 
 ---
 
-## Health Score: 6/10 ⚠️
+## Health Score: 8/10 ✅
 
 **Breakdown:**
 
 | Category | Score | Notes |
 |----------|-------|-------|
 | Data Integrity | 9/10 | No corruption, indexes consistent |
-| Storage Efficiency | 2/10 | 98% wasted on unused vector index |
-| Query Performance | 7/10 | Good index coverage, but bloat overhead |
+| Storage Efficiency | 8/10 | Vector index is actively used (9,021 memories, 6,783 embeddings) |
+| Query Performance | 7/10 | Good index coverage, semantic search working |
 | Operational Health | 8/10 | 82% completion rate, reasonable event counts |
-| Growth Trajectory | 4/10 | Unsustainable at 77MB/day (fixable) |
+| Growth Trajectory | 7/10 | Growth expected for working semantic search |
 
-**Status:** System is functionally healthy but has a critical storage leak. Fixing the vector index bloat and timestamp format will restore score to 9/10.
+**Status:** System is healthy. Vector index investigation resolved - it's actively used, not bloat. Remaining issue: timestamp format inconsistency (70% use string format).
 
 ---
 
@@ -343,8 +337,8 @@ ls -lh ~/.config/swarm-tools/swarm.db
 sqlite3 swarm.db "SELECT name, SUM(pgsize) FROM dbstat 
   WHERE aggregate=TRUE GROUP BY name ORDER BY 2 DESC LIMIT 5;"
 
-# Row counts (watch for memories table)
-sqlite3 swarm.db "SELECT 'memories', COUNT(*) FROM memories;"
+# Row counts (use COUNT(id) for memories due to vector quirk)
+sqlite3 swarm.db "SELECT 'memories', COUNT(id) FROM memories;"
 
 # Session storage
 du -sh ~/.config/swarm-tools/sessions/
@@ -376,14 +370,19 @@ No `schema_version` value found - migration tracking may not be implemented.
 
 ## Conclusion
 
-The 1.4GB database is **NOT normal** for the operational data volume. The system has ~30MB of legitimate data + 1.35GB of vector index bloat from an unused/broken semantic memory feature.
+**Update (2026-01-07):** The 1.4GB database size is **expected** for a working semantic memory system.
 
-**Immediate Action Required:**
-1. Drop unused vector index → reclaim 1.35GB
+**Investigation Results:**
+- ✅ Vector index is actively used (9,021 memories, 6,783 embeddings)
+- ✅ Semantic search working via `hivemind_find()`
+- ✅ `COUNT(*)` returning 0 was a libSQL vector extension quirk, not missing data
+
+**Remaining Action Items:**
+1. ~~Drop unused vector index~~ **RESOLVED** - keep it, it's used
 2. Fix timestamp format → enable time-based queries  
 3. Clean test sessions → reclaim 3.3MB
 
-After these fixes, the system will be healthy with realistic growth of **~1.7 MB/day** (183 MB over 90 days).
+**Known libSQL Quirk:** Always use `COUNT(id)` instead of `COUNT(*)` on tables with `F32_BLOB` vector columns.
 
 ---
 

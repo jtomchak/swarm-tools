@@ -6,7 +6,9 @@
 
 ## Executive Summary
 
-The learning system infrastructure is **BUILT BUT NOT WIRED**. Core components exist (confidence decay, pattern maturity, implicit feedback scoring) but are not integrated into the runtime workflow. The system has 9,017 memories with working decay (75% at 0.7 factor), but pattern maturity tracking shows **zero usage in production**.
+The learning system infrastructure is **BUILT BUT NOT WIRED**. Core components exist (confidence decay, pattern maturity, implicit feedback scoring) but are not integrated into the runtime workflow. The system has 9,021 memories with working decay (75% at 0.7 factor), but pattern maturity tracking shows **zero usage in production**.
+
+> **Note:** Memory counts use `COUNT(id)` not `COUNT(*)` due to libSQL vector extension quirk where `COUNT(*)` returns 0 on tables with `F32_BLOB` columns.
 
 **Critical Gap:** Feedback loop is incomplete - outcomes are NOT being scored and fed back into pattern weights.
 
@@ -17,7 +19,7 @@ The learning system infrastructure is **BUILT BUT NOT WIRED**. Core components e
 ### ✅ WORKING: 90-Day Half-Life Implementation
 
 **Evidence:**
-- 9,017 total memories in database (not 0 as initially thought)
+- 9,021 total memories in database (use `COUNT(id)` not `COUNT(*)` due to libSQL vector quirk)
 - Decay factor distribution shows expected exponential curve:
   - 2,234 fresh memories (decay_factor = 1.0) - 25%
   - 6,782 decayed memories (decay_factor = 0.7) - 75%
