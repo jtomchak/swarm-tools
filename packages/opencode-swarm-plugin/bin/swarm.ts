@@ -84,6 +84,7 @@ import {
 } from "../src/export-tools.js";
 import { tree } from "./commands/tree.js";
 import { session } from "./commands/session.js";
+import { log } from "./commands/log.js";
 import {
   querySwarmHistory,
   formatSwarmHistory,
@@ -97,7 +98,7 @@ import {
 } from "../src/observability-health.js";
 
 // Swarm insights
-import { getRejectionAnalytics } from "../src/swarm-insights.js";
+import { getRejectionAnalytics, getCompactionAnalytics } from "../src/swarm-insights.js";
 
 // Eval tools
 import { getPhase, getScoreHistory, recordEvalRun, getEvalHistoryPath } from "../src/eval-history.js";
@@ -3371,6 +3372,7 @@ ${cyan("Stats & History:")}
   swarm stats --since 24h              Show stats for custom time period
   swarm stats --regressions            Show eval regressions (>10% score drops)
   swarm stats --rejections             Show rejection reason analytics
+  swarm stats --compaction-prompts     Show compaction prompt analytics (visibility into generated prompts)
   swarm stats --json                   Output as JSON for scripting
   swarm o11y                           Show observability health dashboard (hook coverage, events, sessions)
   swarm o11y --since 7d                Custom time period for event stats (default: 7 days)
@@ -5080,6 +5082,7 @@ async function stats() {
 	let format: "text" | "json" = "text";
 	let showRegressions = false;
 	let showRejections = false;
+	let showCompactionPrompts = false;
 
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--since" || args[i] === "-s") {
@@ -5091,6 +5094,8 @@ async function stats() {
 			showRegressions = true;
 		} else if (args[i] === "--rejections") {
 			showRejections = true;
+		} else if (args[i] === "--compaction-prompts") {
+			showCompactionPrompts = true;
 		}
 	}
 
@@ -5278,6 +5283,52 @@ async function stats() {
 					}
 				} else {
 					console.log("│" + pad("  No rejections in this period") + "│");
+				}
+				
+				console.log("└─────────────────────────────────────────────────────────────┘");
+				console.log();
+			}
+		} else if (showCompactionPrompts) {
+			// If --compaction-prompts flag, show compaction analytics
+			const compactionAnalytics = await getCompactionAnalytics(swarmMail);
+			
+			if (format === "json") {
+				console.log(JSON.stringify(compactionAnalytics, null, 2));
+			} else {
+				console.log();
+				const boxWidth = 61;
+				const pad = (text: string) => text + " ".repeat(Math.max(0, boxWidth - text.length));
+				
+				console.log("┌─────────────────────────────────────────────────────────────┐");
+				console.log("│" + pad("  COMPACTION PROMPT ANALYTICS (all time)") + "│");
+				console.log("├─────────────────────────────────────────────────────────────┤");
+				console.log("│" + pad("  Total Events: " + compactionAnalytics.totalEvents) + "│");
+				console.log("│" + pad("  Success Rate: " + compactionAnalytics.successRate.toFixed(1) + "%") + "│");
+				console.log("│" + pad("  Avg Prompt Size: " + compactionAnalytics.avgPromptSize + " chars") + "│");
+				console.log("│" + pad("") + "│");
+				console.log("│" + pad("  By Type:") + "│");
+				console.log("│" + pad("  ├── Prompts Generated: " + compactionAnalytics.byType.prompt_generated) + "│");
+				console.log("│" + pad("  └── Detections Failed: " + compactionAnalytics.byType.detection_failed) + "│");
+				console.log("│" + pad("") + "│");
+				console.log("│" + pad("  Confidence Distribution:") + "│");
+				console.log("│" + pad("  ├── High: " + compactionAnalytics.byConfidence.high) + "│");
+				console.log("│" + pad("  ├── Medium: " + compactionAnalytics.byConfidence.medium) + "│");
+				console.log("│" + pad("  └── Low: " + compactionAnalytics.byConfidence.low) + "│");
+				
+				if (compactionAnalytics.recentPrompts.length > 0) {
+					console.log("│" + pad("") + "│");
+					console.log("│" + pad("  Recent Prompts:") + "│");
+					for (const prompt of compactionAnalytics.recentPrompts.slice(0, 5)) {
+						const timestamp = new Date(prompt.timestamp).toLocaleDateString();
+						const conf = prompt.confidence ? ` (${prompt.confidence})` : "";
+						const line = `  ├── ${timestamp}: ${prompt.length} chars${conf}`;
+						console.log("│" + pad(line) + "│");
+						
+						if (prompt.preview) {
+							const previewLine = `      ${prompt.preview.substring(0, 50)}...`;
+							console.log("│" + pad(previewLine) + "│");
+						}
+					}
 				}
 				
 				console.log("└─────────────────────────────────────────────────────────────┘");
@@ -6207,7 +6258,7 @@ switch (command) {
     break;
   case "log":
   case "logs":
-    await logs();
+    await log();
     break;
   case "stats":
     await stats();

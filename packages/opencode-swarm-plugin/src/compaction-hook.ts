@@ -844,6 +844,7 @@ async function detectSwarm(
           highConfidence = true;
           reasons.push(`${health.stats.reservations} active file reservations`);
         }
+        // TUNED: Single agent registration = medium confidence (coordinator setup)
         if (health.stats.agents > 0) {
           mediumConfidence = true;
           reasons.push(`${health.stats.agents} registered agents`);
@@ -924,12 +925,12 @@ async function detectSwarm(
           }
         }
 
-        // MEDIUM: Recently updated cells (last hour)
-        const oneHourAgo = Date.now() - 60 * 60 * 1000;
-        const recentCells = cells.filter((c) => c.updated_at > oneHourAgo);
+        // MEDIUM: Recently updated cells (TUNED: 30min window, was 1 hour)
+        const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+        const recentCells = cells.filter((c) => c.updated_at > thirtyMinutesAgo);
         if (recentCells.length > 0) {
           mediumConfidence = true;
-          reasons.push(`${recentCells.length} cells updated in last hour`);
+          reasons.push(`${recentCells.length} cells updated in last 30 minutes`);
         }
 
         // LOW: Any cells exist at all
@@ -1160,6 +1161,21 @@ export function createCompactionHook(
 
       // Boost confidence if we found swarm evidence in session messages
       let effectiveConfidence = detection.confidence;
+      
+      // TUNED: Boost from agent name (swarmmail_init) = medium confidence
+      if (scannedState.agentName && effectiveConfidence === "none") {
+        effectiveConfidence = "medium";
+        detection.reasons.push("coordinator initialized (swarmmail_init)");
+        recordPatternExtracted(metrics, "coordinator_init", "swarmmail_init detected");
+      }
+      
+      // TUNED: Boost from epic creation = medium confidence (before subtasks exist)
+      if (scannedState.epicId && effectiveConfidence === "none") {
+        effectiveConfidence = "medium";
+        detection.reasons.push("epic created (hive_create_epic)");
+        recordPatternExtracted(metrics, "epic_created", "hive_create_epic detected");
+      }
+      
       if (scannedState.epicId || scannedState.subtasks.size > 0) {
         // Session messages show swarm activity - this is HIGH confidence
         if (effectiveConfidence === "none" || effectiveConfidence === "low") {
@@ -1304,6 +1320,49 @@ export function createCompactionHook(
       const duration = Date.now() - startTime;
       const summary = getMetricsSummary(metrics);
       
+      // Calculate compaction recommendation signals
+      const openSubtasksCount = detection.state?.subtasks.open || 0;
+      const activeReservationsCount = detection.reasons.find(r => r.includes("active file reservations"))
+        ? parseInt(detection.reasons.find(r => r.includes("active file reservations"))?.match(/\d+/)?.[0] || "0")
+        : 0;
+      const registeredAgentsCount = detection.reasons.find(r => r.includes("registered agents"))
+        ? parseInt(detection.reasons.find(r => r.includes("registered agents"))?.match(/\d+/)?.[0] || "0")
+        : 0;
+      
+      const compactionSignals: string[] = [];
+      let compactionRecommended = false;
+      
+      // THRESHOLDS for "should compact":
+      // - 3+ open subtasks = active coordination
+      // - 2+ active reservations = workers editing
+      // - 2+ registered agents = multi-agent session
+      if (openSubtasksCount >= 3) {
+        compactionSignals.push(`${openSubtasksCount} open subtasks`);
+        compactionRecommended = true;
+      }
+      if (activeReservationsCount >= 2) {
+        compactionSignals.push(`${activeReservationsCount} active reservations`);
+        compactionRecommended = true;
+      }
+      if (registeredAgentsCount >= 2) {
+        compactionSignals.push(`${registeredAgentsCount} registered agents`);
+        compactionRecommended = true;
+      }
+      
+      // Log recommendation if signals present
+      if (compactionRecommended) {
+        log.info(
+          {
+            compaction_recommended: true,
+            reasons: compactionSignals,
+            open_subtasks: openSubtasksCount,
+            active_reservations: activeReservationsCount,
+            registered_agents: registeredAgentsCount,
+          },
+          "compaction recommended",
+        );
+      }
+      
       log.info(
         {
           duration_ms: duration,
@@ -1321,6 +1380,7 @@ export function createCompactionHook(
             patterns_extracted: summary.patterns_extracted,
             patterns_skipped: summary.patterns_skipped,
             extraction_success_rate: summary.extraction_success_rate,
+            compaction_signals: compactionSignals,
           },
         },
         "compaction complete",

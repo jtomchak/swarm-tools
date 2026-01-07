@@ -1001,6 +1001,184 @@ export async function getViolationAnalytics(
 }
 
 // ============================================================================
+// Compaction Analytics
+// ============================================================================
+
+export interface CompactionPromptPreview {
+	timestamp: string;
+	length: number;
+	preview?: string;
+	confidence?: string;
+}
+
+export interface CompactionAnalytics {
+	totalEvents: number;
+	byType: {
+		prompt_generated: number;
+		detection_complete: number;
+		context_injected: number;
+		resumption_started: number;
+		tool_call_tracked: number;
+		[key: string]: number;
+	};
+	avgPromptSize: number;
+	successRate: number;
+	recentPrompts: CompactionPromptPreview[];
+	byConfidence: {
+		high: number;
+		medium: number;
+		low: number;
+	};
+}
+
+/**
+ * Get analytics for coordinator compaction events.
+ *
+ * Queries coordinator_compaction events to calculate:
+ * - Total compaction attempts by type (prompt_generated vs detection_failed)
+ * - Average prompt size for successful compactions
+ * - Success/failure rate
+ * - Recent prompts with preview (truncated to 200 chars)
+ * - Confidence distribution
+ *
+ * @param swarmMail - SwarmMail adapter for database access
+ * @returns Promise resolving to compaction analytics
+ *
+ * @example
+ * ```typescript
+ * const analytics = await getCompactionAnalytics(swarmMail);
+ * // Returns: {
+ * //   totalEvents: 83,
+ * //   byType: { prompt_generated: 72, detection_failed: 11 },
+ * //   avgPromptSize: 4800,
+ * //   successRate: 86.7,
+ * //   recentPrompts: [
+ * //     { timestamp: "2025-12-25T10:00:00Z", length: 5200, preview: "Epic bd-123...", confidence: "high" }
+ * //   ],
+ * //   byConfidence: { high: 60, medium: 12, low: 11 }
+ * // }
+ * ```
+ */
+export async function getCompactionAnalytics(
+	swarmMail: SwarmMailAdapter,
+): Promise<CompactionAnalytics> {
+	const db = await swarmMail.getDatabase();
+
+	// Query all coordinator_compaction events
+	const query = `
+		SELECT data, timestamp
+		FROM events
+		WHERE type = 'coordinator_compaction'
+		ORDER BY timestamp DESC
+	`;
+
+	const result = await db.query(query, []);
+
+	if (!result.rows || result.rows.length === 0) {
+		return {
+			totalEvents: 0,
+			byType: { 
+				prompt_generated: 0, 
+				detection_complete: 0,
+				context_injected: 0,
+				resumption_started: 0,
+				tool_call_tracked: 0,
+			},
+			avgPromptSize: 0,
+			successRate: 0,
+			recentPrompts: [],
+			byConfidence: { high: 0, medium: 0, low: 0 },
+		};
+	}
+
+	// Aggregate metrics
+	const byType: Record<string, number> = {};
+	const byConfidence = { high: 0, medium: 0, low: 0 };
+	const promptSizes: number[] = [];
+	const recentPrompts: CompactionPromptPreview[] = [];
+	let totalEvents = 0;
+	let successfulCompactions = 0;
+
+	for (const row of result.rows as Array<{ data: string; timestamp: number }>) {
+		try {
+			const data = JSON.parse(row.data);
+			
+			// Check for event_type COMPACTION (from coordinator events)
+			if (data.event_type === "COMPACTION") {
+				totalEvents++;
+				
+				// compaction_type is the sub-type (prompt_generated, detection_complete, etc.)
+				const compactionType = data.compaction_type || "unknown";
+				byType[compactionType] = (byType[compactionType] || 0) + 1;
+
+				// Track confidence from payload
+				if (data.payload?.confidence) {
+					const conf = data.payload.confidence.toLowerCase();
+					if (conf in byConfidence) {
+						byConfidence[conf as keyof typeof byConfidence]++;
+					}
+				}
+
+				// Track successful compactions (those that generated prompts)
+				if (compactionType === "prompt_generated") {
+					successfulCompactions++;
+
+					// Track prompt size from payload
+					if (data.payload?.prompt_length) {
+						promptSizes.push(data.payload.prompt_length);
+					}
+
+					// Add to recent prompts (limit to 10)
+					if (recentPrompts.length < 10) {
+						const preview: CompactionPromptPreview = {
+							timestamp: new Date(row.timestamp).toISOString(),
+							length: data.payload?.prompt_length || 0,
+							confidence: data.payload?.confidence,
+						};
+
+						// Add truncated preview if full_prompt exists
+						if (data.payload?.full_prompt) {
+							preview.preview = truncateText(data.payload.full_prompt, 200);
+						}
+
+						recentPrompts.push(preview);
+					}
+				}
+			}
+		} catch (e) {
+			// Skip malformed data
+			continue;
+		}
+	}
+
+	// Calculate average prompt size
+	const avgPromptSize =
+		promptSizes.length > 0
+			? promptSizes.reduce((sum, size) => sum + size, 0) / promptSizes.length
+			: 0;
+
+	// Calculate success rate
+	const successRate =
+		totalEvents > 0 ? (successfulCompactions / totalEvents) * 100 : 0;
+
+	return {
+		totalEvents,
+		byType: {
+			prompt_generated: byType.prompt_generated || 0,
+			detection_complete: byType.detection_complete || 0,
+			context_injected: byType.context_injected || 0,
+			resumption_started: byType.resumption_started || 0,
+			tool_call_tracked: byType.tool_call_tracked || 0,
+			...byType,
+		},
+		avgPromptSize: Math.round(avgPromptSize),
+		successRate: Math.round(successRate * 100) / 100,
+		recentPrompts,
+		byConfidence,
+	};
+}
+
+// ============================================================================
 // File History Warnings (for Worker Prompts)
 // ============================================================================
 

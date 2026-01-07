@@ -1403,3 +1403,84 @@ describe("getPromptInsights", () => {
 		});
 	});
 });
+
+// ============================================================================
+// Strategy Diversification Tests (Cell: mk471w89ya6)
+// ============================================================================
+
+describe("Strategy Selection - Keyword Triggers for Diversification", () => {
+	describe("file-based strategy triggers", () => {
+		test("'move' keyword triggers file-based strategy", async () => {
+			const { selectStrategy } = await import("./swarm-strategies");
+			const result = await selectStrategy("Move all components to new directory");
+			expect(result.strategy).toBe("file-based");
+		});
+
+		test("'update all' multi-word keyword triggers file-based strategy", async () => {
+			const { selectStrategy } = await import("./swarm-strategies");
+			const result = await selectStrategy("Update all imports to use new path");
+			expect(result.strategy).toBe("file-based");
+		});
+	});
+
+	describe("risk-based strategy triggers", () => {
+		test("'CVE' keyword triggers risk-based strategy", async () => {
+			const { selectStrategy } = await import("./swarm-strategies");
+			const result = await selectStrategy("Address CVE-2024-1234 in dependencies");
+			expect(result.strategy).toBe("risk-based");
+		});
+
+		test("case-insensitive matching for risk keywords", async () => {
+			const { selectStrategy } = await import("./swarm-strategies");
+			const resultUpper = await selectStrategy("FIX CRITICAL SECURITY BUG");
+			const resultLower = await selectStrategy("fix critical security bug");
+			const resultMixed = await selectStrategy("Fix Critical Security Bug");
+			
+			expect(resultUpper.strategy).toBe("risk-based");
+			expect(resultLower.strategy).toBe("risk-based");
+			expect(resultMixed.strategy).toBe("risk-based");
+		});
+	});
+
+	describe("strategy distribution regression test", () => {
+		test("diversified keywords produce more balanced distribution", async () => {
+			const { selectStrategy } = await import("./swarm-strategies");
+			
+			// Sample tasks representing typical workload
+			const tasks = [
+				"Add user authentication",           // feature-based
+				"Refactor API handlers",             // file-based
+				"Fix security vulnerability",        // risk-based
+				"Implement dashboard",               // feature-based
+				"Update all imports",                // file-based
+				"Patch critical bug CVE-2024-123",  // risk-based
+				"Build new feature",                 // feature-based
+				"Migrate to new framework",          // file-based
+				"Address urgent security issue",     // risk-based
+				"Create new component",              // feature-based
+			];
+			
+			const results = await Promise.all(
+				tasks.map(task => selectStrategy(task))
+			);
+			
+			const distribution = results.reduce((acc, r) => {
+				acc[r.strategy] = (acc[r.strategy] || 0) + 1;
+				return acc;
+			}, {} as Record<string, number>);
+			
+			// Calculate percentages
+			const total = results.length;
+			const percentages = {
+				"feature-based": (distribution["feature-based"] || 0) / total * 100,
+				"file-based": (distribution["file-based"] || 0) / total * 100,
+				"risk-based": (distribution["risk-based"] || 0) / total * 100,
+			};
+			
+			// Assert more balanced distribution (not 97% feature-based)
+			expect(percentages["feature-based"]).toBeLessThan(70);
+			expect(percentages["file-based"]).toBeGreaterThan(20);
+			expect(percentages["risk-based"]).toBeGreaterThan(10);
+		});
+	});
+});

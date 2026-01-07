@@ -858,4 +858,262 @@ describe("swarm-insights data layer", () => {
 			expect(analyticsB.totalViolations).toBeGreaterThanOrEqual(1);
 		});
 	});
+
+	describe("getCompactionAnalytics", () => {
+		test("returns total compaction events by type", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const db = await swarmMail.getDatabase();
+			const now = Date.now();
+
+			// Seed compaction events
+			await db.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ 
+						event_type: "COMPACTION", 
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 4500 }
+					}),
+					now + 1000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "detection_complete",
+						payload: { confidence: "low", detected: false }
+					}),
+					now + 2000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 6200 }
+					}),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(swarmMail);
+
+			expect(analytics.totalEvents).toBeGreaterThanOrEqual(3);
+			expect(analytics.byType.prompt_generated).toBeGreaterThanOrEqual(2);
+			expect(analytics.byType.detection_complete).toBeGreaterThanOrEqual(1);
+		});
+
+		test("calculates average prompt size", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const db = await swarmMail.getDatabase();
+			const now = Date.now();
+
+			// Clear previous events for clean test
+			const freshSwarmMail = await createInMemorySwarmMail("test-compaction-avg");
+
+			const freshDb = await freshSwarmMail.getDatabase();
+			await freshDb.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 4500 }
+					}),
+					now + 1000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 6200 }
+					}),
+					now + 2000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 3800 }
+					}),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(freshSwarmMail);
+
+			// Average of 4500, 6200, 3800 = 4833
+			expect(analytics.avgPromptSize).toBeCloseTo(4833, 0);
+
+			await freshSwarmMail.close();
+		});
+
+		test("tracks success/failure rate", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const freshSwarmMail = await createInMemorySwarmMail("test-compaction-rate");
+
+			const db = await freshSwarmMail.getDatabase();
+			const now = Date.now();
+
+			await db.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ event_type: "COMPACTION", compaction_type: "prompt_generated", payload: {} }),
+					now + 1000,
+					JSON.stringify({ event_type: "COMPACTION", compaction_type: "prompt_generated", payload: {} }),
+					now + 2000,
+					JSON.stringify({ event_type: "COMPACTION", compaction_type: "prompt_generated", payload: {} }),
+					now + 3000,
+					JSON.stringify({ event_type: "COMPACTION", compaction_type: "detection_complete", payload: { detected: false } }),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(freshSwarmMail);
+
+			expect(analytics.successRate).toBeCloseTo(75, 0); // 3/4 = 75%
+
+			await freshSwarmMail.close();
+		});
+
+		test("returns recent prompts preview", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const freshSwarmMail = await createInMemorySwarmMail("test-compaction-recent");
+
+			const db = await freshSwarmMail.getDatabase();
+			const now = Date.now();
+
+			await db.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 4500 }
+					}),
+					now + 1000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 6200, full_prompt: "Long prompt content..." }
+					}),
+					now + 2000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 3800 }
+					}),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(freshSwarmMail);
+
+			expect(analytics.recentPrompts).toHaveLength(3);
+			expect(analytics.recentPrompts[0].length).toBe(3800); // Most recent first
+			expect(analytics.recentPrompts[1].length).toBe(6200);
+			expect(analytics.recentPrompts[2].length).toBe(4500);
+
+			await freshSwarmMail.close();
+		});
+
+		test("truncates prompt previews to 200 chars", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const freshSwarmMail = await createInMemorySwarmMail("test-compaction-truncate");
+
+			const db = await freshSwarmMail.getDatabase();
+			const now = Date.now();
+
+			const longPrompt = "A".repeat(500); // 500 char prompt
+			await db.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { prompt_length: 500, full_prompt: longPrompt }
+					}),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(freshSwarmMail);
+
+			const withPreview = analytics.recentPrompts.find(p => p.preview);
+			expect(withPreview).toBeDefined();
+			if (withPreview?.preview) {
+				expect(withPreview.preview.length).toBeLessThanOrEqual(203); // 200 + "..."
+			}
+
+			await freshSwarmMail.close();
+		});
+
+		test("includes confidence distribution", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const freshSwarmMail = await createInMemorySwarmMail("test-compaction-confidence");
+
+			const db = await freshSwarmMail.getDatabase();
+			const now = Date.now();
+
+			await db.query(
+				`INSERT INTO events (type, project_key, timestamp, data) VALUES 
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?),
+				('coordinator_compaction', 'test', ?, ?)`,
+				[
+					now,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { confidence: "high" }
+					}),
+					now + 1000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { confidence: "high" }
+					}),
+					now + 2000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "prompt_generated",
+						payload: { confidence: "medium" }
+					}),
+					now + 3000,
+					JSON.stringify({ 
+						event_type: "COMPACTION",
+						compaction_type: "detection_complete",
+						payload: { confidence: "low", detected: false }
+					}),
+				],
+			);
+
+			const analytics = await getCompactionAnalytics(freshSwarmMail);
+
+			expect(analytics.byConfidence.high).toBe(2);
+			expect(analytics.byConfidence.medium).toBe(1);
+			expect(analytics.byConfidence.low).toBe(1);
+
+			await freshSwarmMail.close();
+		});
+
+		test("handles empty database gracefully", async () => {
+			const { getCompactionAnalytics } = await import("./swarm-insights");
+			const emptySwarmMail = await createInMemorySwarmMail("empty-compaction-test");
+
+			const analytics = await getCompactionAnalytics(emptySwarmMail);
+
+			expect(analytics.totalEvents).toBe(0);
+			expect(analytics.successRate).toBe(0);
+			expect(analytics.avgPromptSize).toBe(0);
+			expect(analytics.recentPrompts).toHaveLength(0);
+
+			await emptySwarmMail.close();
+		});
+	});
 });

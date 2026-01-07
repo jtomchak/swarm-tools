@@ -100,6 +100,7 @@ export const STRATEGIES: Record<
       "cleanup",
       "lint",
       "format",
+      "move",
     ],
     guidelines: [
       "Group files by directory or type (e.g., all components, all tests)",
@@ -168,6 +169,7 @@ export const STRATEGIES: Record<
       "patch",
       "audit",
       "review",
+      "cve",
     ],
     guidelines: [
       "Write tests FIRST to capture expected behavior",

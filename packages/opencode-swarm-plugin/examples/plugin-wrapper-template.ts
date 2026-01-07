@@ -349,43 +349,193 @@ function logCompaction(
 }
 
 /**
- * Capture compaction event for evals via CLI
+ * Get date-stamped log file path
+ * Format: ~/.config/swarm-tools/logs/{type}-YYYY-MM-DD.log
+ */
+function getDateStampedLogPath(type: "tools" | "swarmmail" | "errors"): string {
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  return join(LOG_DIR, `${type}-${today}.log`);
+}
+
+/**
+ * Rotate old log files (delete files older than 7 days)
  * 
- * Shells out to `swarm capture` command to avoid import issues.
- * The CLI handles all the logic - plugin wrapper stays dumb.
+ * Runs silently - never breaks the plugin if rotation fails.
+ */
+function rotateLogFiles(): void {
+  try {
+    ensureLogDir();
+    const { readdirSync, unlinkSync, statSync } = require("node:fs");
+    const files = readdirSync(LOG_DIR);
+    const now = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    for (const file of files) {
+      // Only rotate date-stamped files (tools-*, swarmmail-*, errors-*)
+      if (!/^(tools|swarmmail|errors)-\d{4}-\d{2}-\d{2}\.log$/.test(file)) {
+        continue;
+      }
+
+      const filePath = join(LOG_DIR, file);
+      const stats = statSync(filePath);
+      const age = now - stats.mtimeMs;
+
+      if (age > sevenDaysMs) {
+        unlinkSync(filePath);
+      }
+    }
+  } catch {
+    // Silently fail - rotation failures shouldn't break the plugin
+  }
+}
+
+/**
+ * Log a tool invocation to date-stamped file
+ * 
+ * @param toolName - Tool name (e.g., "hive_create", "swarm_status")
+ * @param args - Tool arguments
+ * @param result - Tool result (optional, for successful calls)
+ * @param error - Error message (optional, for failed calls)
+ */
+function logTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  result?: string,
+  error?: string,
+): void {
+  try {
+    ensureLogDir();
+    rotateLogFiles(); // Rotate on every log call (cheap operation)
+
+    const logPath = getDateStampedLogPath("tools");
+    const entry = JSON.stringify({
+      time: new Date().toISOString(),
+      level: error ? "error" : "info",
+      msg: `tool_call: ${toolName}`,
+      tool: toolName,
+      args,
+      ...(result && { result }),
+      ...(error && { error }),
+    });
+
+    appendFileSync(logPath, entry + "\n");
+  } catch {
+    // Silently fail - logging should never break the plugin
+  }
+}
+
+/**
+ * Log a Swarm Mail event to date-stamped file
+ * 
+ * @param event - Event type (e.g., "message_sent", "inbox_fetched")
+ * @param data - Event data
+ */
+function logSwarmMail(
+  event: string,
+  data: Record<string, unknown>,
+): void {
+  try {
+    ensureLogDir();
+    rotateLogFiles();
+
+    const logPath = getDateStampedLogPath("swarmmail");
+    const entry = JSON.stringify({
+      time: new Date().toISOString(),
+      level: "info",
+      msg: event,
+      ...data,
+    });
+
+    appendFileSync(logPath, entry + "\n");
+  } catch {
+    // Silently fail
+  }
+}
+
+/**
+ * Log an error to date-stamped file
+ * 
+ * @param error - Error message
+ * @param data - Additional error context
+ */
+function logError(
+  error: string,
+  data?: Record<string, unknown>,
+): void {
+  try {
+    ensureLogDir();
+    rotateLogFiles();
+
+    const logPath = getDateStampedLogPath("errors");
+    const entry = JSON.stringify({
+      time: new Date().toISOString(),
+      level: "error",
+      msg: error,
+      ...data,
+    });
+
+    appendFileSync(logPath, entry + "\n");
+  } catch {
+    // Silently fail
+  }
+}
+
+/**
+ * Capture compaction event for evals (INLINED - do not import from opencode-swarm-plugin)
+ * 
+ * Writes COMPACTION events directly to session JSONL file.
+ * This is inlined to avoid import issues - plugin wrapper must be 100% self-contained.
+ * 
+ * Matches the structure of captureCompactionEvent from eval-capture.ts but writes
+ * ONLY to JSONL (not libSQL) to avoid swarm-mail dependency.
  * 
  * @param sessionID - Session ID
  * @param epicID - Epic ID (or "unknown" if not detected)
- * @param compactionType - Event type (detection_complete, prompt_generated, context_injected)
+ * @param compactionType - Event type (detection_complete, prompt_generated, context_injected, resumption_started, tool_call_tracked)
  * @param payload - Event-specific data (full prompts, detection results, etc.)
  */
 async function captureCompaction(
   sessionID: string,
   epicID: string,
-  compactionType: "detection_complete" | "prompt_generated" | "context_injected",
+  compactionType: "detection_complete" | "prompt_generated" | "context_injected" | "resumption_started" | "tool_call_tracked",
   payload: any,
 ): Promise<void> {
   try {
-    // Shell out to CLI - no imports needed, version always matches
-    const args = [
-      "capture",
-      "--session", sessionID,
-      "--epic", epicID,
-      "--type", compactionType,
-      "--payload", JSON.stringify(payload),
-    ];
+    // Build the CoordinatorEvent object matching eval-capture.ts schema
+    const event = {
+      session_id: sessionID,
+      epic_id: epicID,
+      timestamp: new Date().toISOString(),
+      event_type: "COMPACTION",
+      compaction_type: compactionType,
+      payload: payload,
+    };
+
+    // Session directory: ~/.config/swarm-tools/sessions/
+    const sessionDir = process.env.SWARM_SESSIONS_DIR || 
+      join(homedir(), ".config", "swarm-tools", "sessions");
     
-    const proc = spawn(SWARM_CLI, args, {
-      env: { ...process.env, SWARM_PROJECT_DIR: projectDirectory },
-      stdio: ["ignore", "ignore", "ignore"], // Fire and forget
+    // Ensure directory exists
+    if (!existsSync(sessionDir)) {
+      mkdirSync(sessionDir, { recursive: true });
+    }
+
+    // Write to JSONL (append mode)
+    const sessionPath = join(sessionDir, `${sessionID}.jsonl`);
+    const line = `${JSON.stringify(event)}\n`;
+    appendFileSync(sessionPath, line, "utf-8");
+
+    logCompaction("debug", "compaction_event_captured", {
+      session_id: sessionID,
+      epic_id: epicID,
+      compaction_type: compactionType,
+      session_path: sessionPath,
     });
-    
-    // Don't wait - capture is non-blocking
-    proc.unref();
   } catch (err) {
     // Non-fatal - capture failures shouldn't break compaction
     logCompaction("warn", "compaction_capture_failed", {
       session_id: sessionID,
+      epic_id: epicID,
       compaction_type: compactionType,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -451,6 +601,14 @@ async function execTool(
         try {
           const result = JSON.parse(stdout);
           if (result.success && result.data !== undefined) {
+            // Log successful tool call
+            logTool(name, args, typeof result.data === "string" ? result.data : JSON.stringify(result.data));
+            
+            // Log Swarm Mail events separately
+            if (name.startsWith("swarmmail_")) {
+              logSwarmMail(`tool_${name}`, { args, result: result.data });
+            }
+            
             // Unwrap the data for cleaner tool output
             resolve(
               typeof result.data === "string"
@@ -463,17 +621,30 @@ async function execTool(
             const errorMsg = typeof result.error === "string" 
               ? result.error 
               : (result.error.message || "Tool execution failed");
+            
+            // Log failed tool call
+            logTool(name, args, undefined, errorMsg);
+            logError(`Tool ${name} failed`, { args, error: errorMsg });
+            
             reject(new Error(errorMsg));
           } else {
+            // Log successful (non-standard response)
+            logTool(name, args, stdout);
             resolve(stdout);
           }
         } catch {
+          // Log successful (unparseable response)
+          logTool(name, args, stdout);
           resolve(stdout);
         }
       } else if (code === 2) {
-        reject(new Error(`Unknown tool: ${name}`));
+        const errorMsg = `Unknown tool: ${name}`;
+        logError(errorMsg, { args });
+        reject(new Error(errorMsg));
       } else if (code === 3) {
-        reject(new Error(`Invalid JSON args: ${stderr}`));
+        const errorMsg = `Invalid JSON args: ${stderr}`;
+        logError(errorMsg, { tool: name, args });
+        reject(new Error(errorMsg));
       } else {
         // Tool returned error
         try {
@@ -483,15 +654,27 @@ async function execTool(
             const errorMsg = typeof result.error === "string"
               ? result.error
               : (result.error.message || `Tool failed with code ${code}`);
+            
+            logTool(name, args, undefined, errorMsg);
+            logError(`Tool ${name} failed with code ${code}`, { args, error: errorMsg });
+            
             reject(new Error(errorMsg));
           } else {
+            const errorMsg = stderr || stdout || `Tool failed with code ${code}`;
+            logTool(name, args, undefined, errorMsg);
+            logError(`Tool ${name} failed with code ${code}`, { args, stderr, stdout });
+            
             reject(
-              new Error(stderr || stdout || `Tool failed with code ${code}`),
+              new Error(errorMsg),
             );
           }
         } catch {
+          const errorMsg = stderr || stdout || `Tool failed with code ${code}`;
+          logTool(name, args, undefined, errorMsg);
+          logError(`Tool ${name} failed with code ${code}`, { args, stderr, stdout });
+          
           reject(
-            new Error(stderr || stdout || `Tool failed with code ${code}`),
+            new Error(errorMsg),
           );
         }
       }
