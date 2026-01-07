@@ -95,7 +95,6 @@ describe("libSQL streams schema", () => {
         timestamp: "INTEGER",
         sequence: "INTEGER", // Generated column (hidden: 3)
         data: "TEXT", // JSON stored as TEXT
-        created_at: "TEXT", // ISO timestamp
       });
     });
 
@@ -371,8 +370,8 @@ describe("libSQL streams schema", () => {
         alternatives: "TEXT",
         precedent_cited: "TEXT",
         outcome_event_id: "INTEGER",
+        quality_score: "REAL",
         timestamp: "INTEGER",
-        created_at: "TEXT",
       });
     });
 

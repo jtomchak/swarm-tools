@@ -71,8 +71,7 @@ export async function createLibSQLStreamsSchema(db: DatabaseAdapter): Promise<vo
       project_key TEXT NOT NULL,
       timestamp INTEGER NOT NULL,
       sequence INTEGER GENERATED ALWAYS AS (id) STORED,
-      data TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      data TEXT NOT NULL
     )
   `);
 
@@ -95,6 +94,13 @@ export async function createLibSQLStreamsSchema(db: DatabaseAdapter): Promise<vo
   await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_events_project_type 
     ON events(project_key, type)
+  `);
+
+  // Composite index for common query pattern: filter by project + sort by time
+  // Used by: timeline queries, dashboard views, event filtering by time range
+  await db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_events_project_timestamp 
+    ON events(project_key, timestamp)
   `);
 
   // ========================================================================
@@ -358,8 +364,7 @@ export async function createLibSQLStreamsSchema(db: DatabaseAdapter): Promise<vo
       precedent_cited TEXT,
       outcome_event_id INTEGER,
       quality_score REAL,
-      timestamp INTEGER NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      timestamp INTEGER NOT NULL
     )
   `);
 
@@ -395,8 +400,7 @@ export async function createLibSQLStreamsSchema(db: DatabaseAdapter): Promise<vo
       target_entity_id TEXT NOT NULL,
       link_type TEXT NOT NULL,
       strength REAL DEFAULT 1.0,
-      context TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      context TEXT
     )
   `);
 
@@ -466,7 +470,7 @@ export async function validateLibSQLStreamsSchema(db: DatabaseAdapter): Promise<
       PRAGMA table_xinfo('events')
     `);
     const eventsColNames = eventsCols.rows.map((r: any) => r.name as string);
-    const requiredEventsCols = ["id", "type", "project_key", "timestamp", "sequence", "data", "created_at"];
+    const requiredEventsCols = ["id", "type", "project_key", "timestamp", "sequence", "data"];
     
     for (const col of requiredEventsCols) {
       if (!eventsColNames.includes(col)) return false;
