@@ -19,6 +19,8 @@ import {
   readSwarmMessage,
   reserveSwarmFiles,
   releaseSwarmFiles,
+  releaseAllSwarmFiles,
+  releaseSwarmFilesForAgent,
   acknowledgeSwarmMessage,
   checkSwarmHealth,
 } from "./swarm-mail";
@@ -274,6 +276,137 @@ describe("swarm-mail", () => {
       
       expect(agentDReserve1.conflicts.length).toBe(0);
       expect(agentDReserve2.conflicts.length).toBe(0);
+    });
+  });
+
+  describe("releaseSwarmFilesAdmin", () => {
+    test("should release ALL reservations across agents", async () => {
+      const projectPath = `${TEST_PROJECT}-admin-all-${Date.now()}`;
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentAllA",
+        dbOverride: db,
+      });
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentAllB",
+        dbOverride: db,
+      });
+
+      await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentAllA",
+        paths: ["src/all-release-1.ts"],
+        reason: "All release test A",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentAllB",
+        paths: ["src/all-release-2.ts"],
+        reason: "All release test B",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      const releaseAll = await releaseAllSwarmFiles({
+        projectPath,
+        actorName: "Coordinator",
+        dbOverride: db,
+      });
+
+      expect(releaseAll.released).toBe(2);
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentAllC",
+        dbOverride: db,
+      });
+
+      const reserveAfter = await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentAllC",
+        paths: ["src/all-release-1.ts", "src/all-release-2.ts"],
+        reason: "Post release",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      expect(reserveAfter.conflicts.length).toBe(0);
+    });
+
+    test("should release reservations for a specific agent", async () => {
+      const projectPath = `${TEST_PROJECT}-admin-target-${Date.now()}`;
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentTargetA",
+        dbOverride: db,
+      });
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentTargetB",
+        dbOverride: db,
+      });
+
+      await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentTargetA",
+        paths: ["src/target-release-1.ts"],
+        reason: "Target release A",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentTargetB",
+        paths: ["src/target-release-2.ts"],
+        reason: "Target release B",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      const releaseTarget = await releaseSwarmFilesForAgent({
+        projectPath,
+        actorName: "Coordinator",
+        targetAgent: "AgentTargetA",
+        dbOverride: db,
+      });
+
+      expect(releaseTarget.released).toBe(1);
+
+      await initSwarmAgent({
+        projectPath,
+        agentName: "AgentTargetC",
+        dbOverride: db,
+      });
+
+      const reserveFreed = await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentTargetC",
+        paths: ["src/target-release-1.ts"],
+        reason: "Freed file",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      const reserveBlocked = await reserveSwarmFiles({
+        projectPath,
+        agentName: "AgentTargetC",
+        paths: ["src/target-release-2.ts"],
+        reason: "Still held",
+        exclusive: true,
+        dbOverride: db,
+      });
+
+      expect(reserveFreed.conflicts.length).toBe(0);
+      expect(reserveBlocked.conflicts.length).toBeGreaterThan(0);
     });
   });
 

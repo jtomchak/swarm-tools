@@ -795,6 +795,8 @@ async function handleFileReleased(
 ): Promise<void> {
   if (event.type !== "file_released") return;
 
+  const targetAgent = event.target_agent ?? event.agent_name;
+
   if (event.reservation_ids && event.reservation_ids.length > 0) {
     // Release specific reservations
     await db.query(
@@ -806,14 +808,21 @@ async function handleFileReleased(
     await db.query(
       `UPDATE reservations SET released_at = $1
        WHERE project_key = $2 AND agent_name = $3 AND path_pattern = ANY($4) AND released_at IS NULL`,
-      [event.timestamp, event.project_key, event.agent_name, event.paths],
+      [event.timestamp, event.project_key, targetAgent, event.paths],
+    );
+  } else if (event.release_all) {
+    // Release all reservations in project
+    await db.query(
+      `UPDATE reservations SET released_at = $1
+       WHERE project_key = $2 AND released_at IS NULL`,
+      [event.timestamp, event.project_key],
     );
   } else {
     // Release all for agent
     await db.query(
       `UPDATE reservations SET released_at = $1
        WHERE project_key = $2 AND agent_name = $3 AND released_at IS NULL`,
-      [event.timestamp, event.project_key, event.agent_name],
+      [event.timestamp, event.project_key, targetAgent],
     );
   }
 }

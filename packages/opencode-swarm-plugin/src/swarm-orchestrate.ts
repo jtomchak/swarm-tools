@@ -389,9 +389,6 @@ interface VerificationGateResult {
   blockers: string[];
 }
 
-// NOTE: UBS scan (runUbsScan, UbsScanResult) removed in v0.31
-// It was slowing down completion without proportional value.
-// Run UBS manually if needed: ubs scan <files>
 
 /**
  * Run typecheck verification
@@ -519,8 +516,8 @@ async function runTestVerification(
  * 1. Typecheck
  * 2. Tests for touched files
  *
- * NOTE: UBS scan was removed in v0.31 - it was slowing down completion
- * without providing proportional value. Run UBS manually if needed.
+ * NOTE: Bug scanning was removed in v0.31 - it was slowing down completion
+ * without providing proportional value.
  *
  * All steps must pass (or be skipped with valid reason) to proceed.
  */
@@ -531,7 +528,7 @@ async function runVerificationGate(
   const steps: VerificationStep[] = [];
   const blockers: string[] = [];
 
-  // Step 1: Typecheck (UBS scan removed in v0.31)
+  // Step 1: Typecheck
   const typecheckStep = await runTypecheckVerification();
   steps.push(typecheckStep);
   if (!typecheckStep.passed && !typecheckStep.skipped) {
@@ -681,10 +678,6 @@ export const swarm_init = tool({
 
     if (!availability.get("cass")?.status.available) {
       degradedFeatures.push("historical context from past sessions");
-    }
-
-    if (!availability.get("ubs")?.status.available) {
-      degradedFeatures.push("pre-completion bug scanning");
     }
 
     if (!availability.get("hivemind")?.status.available) {
@@ -1116,7 +1109,7 @@ export const swarm_broadcast = tool({
  *
  * Implements the Verification Gate (from superpowers):
  * 1. IDENTIFY: What commands prove this claim?
- * 2. RUN: Execute verification (UBS, typecheck, tests)
+ * 2. RUN: Execute verification (typecheck, tests)
  * 3. READ: Check exit codes and output
  * 4. VERIFY: All checks must pass
  * 5. ONLY THEN: Close the cell
@@ -1350,10 +1343,6 @@ Continuing with completion, but this should be fixed for future subtasks.`;
           );
         }
       }
-
-      // NOTE: Legacy UBS-only path removed in v0.31
-      // UBS scan was slowing down completion without proportional value.
-      // Run UBS manually if needed: ubs scan <files>
 
       // Contract Validation - check files_touched against WorkerHandoff contract
       let contractValidation: { valid: boolean; violations: string[] } | null = null;
@@ -2004,7 +1993,7 @@ Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
         "",
         `### Recovery Actions`,
         "1. Check error message for specific issue",
-        "2. Review failed step (UBS scan, typecheck, cell close, etc.)",
+        "2. Review failed step (typecheck, tests, cell close, etc.)",
         "3. Fix underlying issue or use skip flags if appropriate",
         "4. Retry swarm_complete after fixing",
       ]

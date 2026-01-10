@@ -17,9 +17,9 @@ import {
 
 describe("SUBTASK_PROMPT_V2", () => {
   describe("memory query emphasis", () => {
-    test("Step 2 is semantic-memory_find and marked MANDATORY", () => {
+    test("Step 2 is hivemind_find and marked MANDATORY", () => {
       expect(SUBTASK_PROMPT_V2).toContain("### Step 2:");
-      expect(SUBTASK_PROMPT_V2).toContain("semantic-memory_find");
+      expect(SUBTASK_PROMPT_V2).toContain("hivemind_find");
       // Must have MANDATORY in the step header
       expect(SUBTASK_PROMPT_V2).toMatch(/### Step 2:.*MANDATORY/i);
     });
@@ -87,10 +87,10 @@ describe("SUBTASK_PROMPT_V2", () => {
       expect(SUBTASK_PROMPT_V2).toMatch(/### Step 1:[\s\S]*?swarmmail_init/);
     });
 
-    test("Step 2 is semantic-memory_find (before skills)", () => {
+    test("Step 2 is hivemind_find (before skills)", () => {
       const step2Pos = SUBTASK_PROMPT_V2.indexOf("### Step 2:");
       const step3Pos = SUBTASK_PROMPT_V2.indexOf("### Step 3:");
-      const memoryFindPos = SUBTASK_PROMPT_V2.indexOf("semantic-memory_find");
+      const memoryFindPos = SUBTASK_PROMPT_V2.indexOf("hivemind_find");
       const skillsPos = SUBTASK_PROMPT_V2.indexOf("skills_list");
       
       // Memory find should be in Step 2, before skills in Step 3
@@ -99,8 +99,8 @@ describe("SUBTASK_PROMPT_V2", () => {
       expect(skillsPos).toBeGreaterThan(step3Pos);
     });
 
-    test("semantic-memory_store comes before swarm_complete", () => {
-      const storePos = SUBTASK_PROMPT_V2.indexOf("semantic-memory_store");
+    test("hivemind_store comes before swarm_complete", () => {
+      const storePos = SUBTASK_PROMPT_V2.indexOf("hivemind_store");
       const completePos = SUBTASK_PROMPT_V2.lastIndexOf("swarm_complete");
       
       expect(storePos).toBeGreaterThan(0);
@@ -131,7 +131,7 @@ describe("SUBTASK_PROMPT_V2", () => {
       expect(criticalSection).not.toBeNull();
       if (!criticalSection) return;
       
-      expect(criticalSection[0]).toMatch(/semantic-memory_find|memory.*MUST|Step 2.*MUST/i);
+      expect(criticalSection[0]).toMatch(/hivemind_find|memory.*MUST|Step 2.*MUST/i);
     });
 
     test("lists consequences of skipping memory steps", () => {
@@ -175,7 +175,7 @@ describe("formatSubtaskPromptV2", () => {
     });
 
     expect(result).toMatch(/Step 2:.*MANDATORY/i);
-    expect(result).toContain("semantic-memory_find");
+    expect(result).toContain("hivemind_find");
   });
 });
 
@@ -337,13 +337,13 @@ describe("RESEARCHER_PROMPT", () => {
       expect(step4Content).toContain("INSTALLED version");
     });
 
-    test("Step 5 is storing detailed findings in semantic-memory", () => {
+    test("Step 5 is storing detailed findings in hivemind", () => {
       const step5Match = RESEARCHER_PROMPT.match(/### Step 5:[\s\S]*?### Step 6:/);
       expect(step5Match).not.toBeNull();
       if (!step5Match) return;
       
       const step5Content = step5Match[0];
-      expect(step5Content).toContain("semantic-memory_store");
+      expect(step5Content).toContain("hivemind_store");
       expect(step5Content).toMatch(/store.*individually/i);
     });
 
@@ -393,14 +393,14 @@ describe("RESEARCHER_PROMPT", () => {
   });
 
   describe("output requirements", () => {
-    test("specifies TWO output destinations: semantic-memory and return JSON", () => {
+    test("specifies TWO output destinations: hivemind and return JSON", () => {
       expect(RESEARCHER_PROMPT).toMatch(/TWO places/i);
-      expect(RESEARCHER_PROMPT).toContain("semantic-memory");
+      expect(RESEARCHER_PROMPT).toContain("hivemind");
       expect(RESEARCHER_PROMPT).toContain("Return JSON");
     });
 
-    test("explains semantic-memory is for detailed findings", () => {
-      expect(RESEARCHER_PROMPT).toMatch(/semantic-memory.*detailed/i);
+    test("explains hivemind is for detailed findings", () => {
+      expect(RESEARCHER_PROMPT).toMatch(/hivemind.*detailed/i);
     });
 
     test("explains return JSON is for condensed summary", () => {
@@ -506,14 +506,14 @@ describe("on-demand research section", () => {
     expect(betweenSection).toContain("## [ON-DEMAND RESEARCH]");
   });
 
-  test("research section instructs to check semantic-memory first", () => {
+  test("research section instructs to check hivemind first", () => {
     const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
     expect(researchMatch).not.toBeNull();
     if (!researchMatch) return;
     
     const researchContent = researchMatch[0];
-    expect(researchContent).toContain("semantic-memory_find");
-    expect(researchContent).toMatch(/check.*semantic-memory.*first/i);
+    expect(researchContent).toContain("hivemind_find");
+    expect(researchContent).toMatch(/check.*hivemind.*first/i);
   });
 
   test("research section includes swarm_spawn_researcher tool usage", () => {
@@ -557,7 +557,7 @@ describe("on-demand research section", () => {
     const researchContent = researchMatch[0];
     
     // Should have numbered steps
-    expect(researchContent).toMatch(/1\.\s*.*Check semantic-memory/i);
+    expect(researchContent).toMatch(/1\.\s*.*Check hivemind/i);
     expect(researchContent).toMatch(/2\.\s*.*spawn researcher/i);
     expect(researchContent).toMatch(/3\.\s*.*wait.*continue/i);
   });
@@ -1032,7 +1032,7 @@ describe("getPromptInsights", () => {
       expect(typeof result).toBe("string");
     });
 
-    test.skip("queries semantic-memory for file-specific learnings", async () => {
+    test.skip("queries hivemind for file-specific learnings", async () => {
       const { getPromptInsights } = await import("./swarm-prompts");
       const result = await getPromptInsights({ 
         role: "worker",
@@ -1065,7 +1065,7 @@ describe("getPromptInsights", () => {
       await expect(getPromptInsights({ role: "coordinator" })).resolves.toBeDefined();
     });
 
-    test.skip("returns empty string when semantic-memory unavailable", async () => {
+    test.skip("returns empty string when hivemind unavailable", async () => {
       const { getPromptInsights } = await import("./swarm-prompts");
       
       // Should not throw even if memory is unavailable

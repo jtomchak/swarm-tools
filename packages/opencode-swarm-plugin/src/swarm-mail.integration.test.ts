@@ -23,6 +23,8 @@ import {
   swarmmail_read_message,
   swarmmail_reserve,
   swarmmail_release,
+  swarmmail_release_all,
+  swarmmail_release_agent,
   swarmmail_ack,
   swarmmail_health,
   clearSessionState,
@@ -780,6 +782,143 @@ describe("swarm-mail integration (embedded)", () => {
       expect(result.released).toBe(1);
 
       clearSessionState(ctx.sessionID);
+    });
+  });
+
+  describe("swarmmail_release_admin", () => {
+    it("releases all reservations across agents", async () => {
+      const agent1Ctx = createTestContext();
+      const agent2Ctx = createTestContext();
+      const coordinatorCtx = createTestContext();
+      const verifierCtx = createTestContext();
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "AdminAgentA" },
+        agent1Ctx,
+      );
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "AdminAgentB" },
+        agent2Ctx,
+      );
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "Coordinator" },
+        coordinatorCtx,
+      );
+
+      await executeTool(
+        swarmmail_reserve,
+        { paths: ["src/admin-release-1.ts"], exclusive: true },
+        agent1Ctx,
+      );
+
+      await executeTool(
+        swarmmail_reserve,
+        { paths: ["src/admin-release-2.ts"], exclusive: true },
+        agent2Ctx,
+      );
+
+      const releaseAll = await executeTool<{ released: number }>(
+        swarmmail_release_all,
+        {},
+        coordinatorCtx,
+      );
+
+      expect(releaseAll.released).toBe(2);
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "Verifier" },
+        verifierCtx,
+      );
+
+      const reserveAfter = await executeTool<{ conflicts?: unknown[] }>(
+        swarmmail_reserve,
+        { paths: ["src/admin-release-1.ts", "src/admin-release-2.ts"], exclusive: true },
+        verifierCtx,
+      );
+
+      expect(reserveAfter.conflicts ?? []).toHaveLength(0);
+
+      clearSessionState(agent1Ctx.sessionID);
+      clearSessionState(agent2Ctx.sessionID);
+      clearSessionState(coordinatorCtx.sessionID);
+      clearSessionState(verifierCtx.sessionID);
+    });
+
+    it("releases reservations for a specific agent", async () => {
+      const agent1Ctx = createTestContext();
+      const agent2Ctx = createTestContext();
+      const coordinatorCtx = createTestContext();
+      const verifierCtx = createTestContext();
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "TargetAgentA" },
+        agent1Ctx,
+      );
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "TargetAgentB" },
+        agent2Ctx,
+      );
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "Coordinator" },
+        coordinatorCtx,
+      );
+
+      await executeTool(
+        swarmmail_reserve,
+        { paths: ["src/agent-release-1.ts"], exclusive: true },
+        agent1Ctx,
+      );
+
+      await executeTool(
+        swarmmail_reserve,
+        { paths: ["src/agent-release-2.ts"], exclusive: true },
+        agent2Ctx,
+      );
+
+      const releaseTarget = await executeTool<{ released: number }>(
+        swarmmail_release_agent,
+        { agent_name: "TargetAgentA" },
+        coordinatorCtx,
+      );
+
+      expect(releaseTarget.released).toBe(1);
+
+      await executeTool(
+        swarmmail_init,
+        { project_path: TEST_DB_PATH, agent_name: "Verifier" },
+        verifierCtx,
+      );
+
+      const reserveFreed = await executeTool<{ conflicts?: unknown[] }>(
+        swarmmail_reserve,
+        { paths: ["src/agent-release-1.ts"], exclusive: true },
+        verifierCtx,
+      );
+
+      const reserveHeld = await executeTool<{ conflicts?: unknown[] }>(
+        swarmmail_reserve,
+        { paths: ["src/agent-release-2.ts"], exclusive: true },
+        verifierCtx,
+      );
+
+      expect(reserveFreed.conflicts ?? []).toHaveLength(0);
+      expect((reserveHeld.conflicts ?? []).length).toBeGreaterThan(0);
+
+      clearSessionState(agent1Ctx.sessionID);
+      clearSessionState(agent2Ctx.sessionID);
+      clearSessionState(coordinatorCtx.sessionID);
+      clearSessionState(verifierCtx.sessionID);
     });
   });
 

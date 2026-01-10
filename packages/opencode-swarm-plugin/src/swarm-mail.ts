@@ -24,6 +24,8 @@ import {
   readSwarmMessage,
   reserveSwarmFiles,
   releaseSwarmFiles,
+  releaseAllSwarmFiles,
+  releaseSwarmFilesForAgent,
   acknowledgeSwarmMessage,
   checkSwarmHealth,
   getActiveReservations,
@@ -95,6 +97,11 @@ interface ReserveArgs {
 interface ReleaseArgs {
   paths?: string[];
   reservation_ids?: number[];
+}
+
+/** Release by agent tool arguments */
+interface ReleaseAgentArgs {
+  agent_name: string;
 }
 
 /** Ack tool arguments */
@@ -629,6 +636,107 @@ export const swarmmail_release = tool({
 });
 
 /**
+ * Release all reservations in the project (coordinator override)
+ */
+export const swarmmail_release_all = tool({
+  description: "Release all file reservations in the project (coordinator override)",
+  args: {},
+  async execute(_args: Record<string, never>, ctx: ToolContext): Promise<string> {
+    const sessionID = ctx.sessionID || "default";
+    const state = loadSessionState(sessionID);
+
+    if (!state) {
+      return JSON.stringify(
+        { error: "Session not initialized. Call swarmmail_init first." },
+        null,
+        2,
+      );
+    }
+
+    try {
+      const result = await releaseAllSwarmFiles({
+        projectPath: state.projectKey,
+        actorName: state.agentName,
+      });
+
+      state.reservations = [];
+      saveSessionState(sessionID, state);
+
+      return JSON.stringify(
+        {
+          released: result.released,
+          released_at: result.releasedAt,
+          release_all: true,
+        },
+        null,
+        2,
+      );
+    } catch (error) {
+      return JSON.stringify(
+        {
+          error: `Failed to release all files: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      );
+    }
+  },
+});
+
+/**
+ * Release all reservations for a specific agent (coordinator override)
+ */
+export const swarmmail_release_agent = tool({
+  description: "Release all file reservations for a specific agent (coordinator override)",
+  args: {
+    agent_name: tool.schema.string().describe("Target agent name"),
+  },
+  async execute(args: ReleaseAgentArgs, ctx: ToolContext): Promise<string> {
+    const sessionID = ctx.sessionID || "default";
+    const state = loadSessionState(sessionID);
+
+    if (!state) {
+      return JSON.stringify(
+        { error: "Session not initialized. Call swarmmail_init first." },
+        null,
+        2,
+      );
+    }
+
+    try {
+      const result = await releaseSwarmFilesForAgent({
+        projectPath: state.projectKey,
+        actorName: state.agentName,
+        targetAgent: args.agent_name,
+      });
+
+      if (args.agent_name === state.agentName) {
+        state.reservations = [];
+        saveSessionState(sessionID, state);
+      }
+
+      return JSON.stringify(
+        {
+          released: result.released,
+          released_at: result.releasedAt,
+          target_agent: args.agent_name,
+        },
+        null,
+        2,
+      );
+    } catch (error) {
+      return JSON.stringify(
+        {
+          error: `Failed to release files for agent: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      );
+    }
+  },
+});
+
+/**
  * Acknowledge a message
  */
 export const swarmmail_ack = tool({
@@ -734,6 +842,8 @@ export const swarmMailTools = {
   swarmmail_read_message: swarmmail_read_message,
   swarmmail_reserve: swarmmail_reserve,
   swarmmail_release: swarmmail_release,
+  swarmmail_release_all: swarmmail_release_all,
+  swarmmail_release_agent: swarmmail_release_agent,
   swarmmail_ack: swarmmail_ack,
   swarmmail_health: swarmmail_health,
 };

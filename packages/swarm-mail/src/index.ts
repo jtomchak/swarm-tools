@@ -126,6 +126,8 @@ export {
 	initSwarmAgent,
 	readSwarmMessage,
 	releaseSwarmFiles,
+	releaseAllSwarmFiles,
+	releaseSwarmFilesForAgent,
 	reserveSwarmFiles,
 	sendSwarmMessage,
 } from "./streams/swarm-mail";

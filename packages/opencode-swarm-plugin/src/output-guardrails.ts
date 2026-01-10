@@ -135,6 +135,8 @@ export const DEFAULT_GUARDRAIL_CONFIG: GuardrailConfig = {
     "swarmmail_read_message",
     "swarmmail_reserve",
     "swarmmail_release",
+    "swarmmail_release_all",
+    "swarmmail_release_agent",
     "swarmmail_ack",
 
     // Structured output tools - always return full output

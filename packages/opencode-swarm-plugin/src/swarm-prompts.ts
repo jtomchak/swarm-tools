@@ -460,7 +460,6 @@ swarm_complete(
 \`\`\`
 
 **This automatically:**
-- Runs UBS bug scan
 - Releases file reservations
 - Records learning signals
 - Notifies coordinator

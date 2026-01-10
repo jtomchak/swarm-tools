@@ -135,6 +135,10 @@ export const FileReservedEventSchema = BaseEventSchema.extend({
 export const FileReleasedEventSchema = BaseEventSchema.extend({
   type: z.literal("file_released"),
   agent_name: z.string(),
+  /** Optional target agent for administrative release */
+  target_agent: z.string().optional(),
+  /** Release all reservations in project (coordinator override) */
+  release_all: z.boolean().optional(),
   /** Specific paths to release, or empty to release all */
   paths: z.array(z.string()).optional(),
   /** Specific reservation IDs to release */

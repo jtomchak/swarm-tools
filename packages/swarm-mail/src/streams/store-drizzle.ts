@@ -387,6 +387,8 @@ async function handleFileReleasedDrizzle(
 ): Promise<void> {
   if (event.type !== "file_released") return;
 
+  const targetAgent = event.target_agent ?? event.agent_name;
+
   if (event.reservation_ids && event.reservation_ids.length > 0) {
     // Release specific reservations
     await db
@@ -401,8 +403,19 @@ async function handleFileReleasedDrizzle(
       .where(
         and(
           eq(reservationsTable.project_key, event.project_key),
-          eq(reservationsTable.agent_name, event.agent_name),
+          eq(reservationsTable.agent_name, targetAgent),
           inArray(reservationsTable.path_pattern, event.paths),
+          sql`${reservationsTable.released_at} IS NULL`,
+        ),
+      );
+  } else if (event.release_all) {
+    // Release all reservations in project
+    await db
+      .update(reservationsTable)
+      .set({ released_at: event.timestamp })
+      .where(
+        and(
+          eq(reservationsTable.project_key, event.project_key),
           sql`${reservationsTable.released_at} IS NULL`,
         ),
       );
@@ -414,7 +427,7 @@ async function handleFileReleasedDrizzle(
       .where(
         and(
           eq(reservationsTable.project_key, event.project_key),
-          eq(reservationsTable.agent_name, event.agent_name),
+          eq(reservationsTable.agent_name, targetAgent),
           sql`${reservationsTable.released_at} IS NULL`,
         ),
       );

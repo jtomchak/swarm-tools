@@ -305,6 +305,30 @@ describe("FileReleasedEventSchema", () => {
     };
     expect(() => FileReleasedEventSchema.parse(event)).not.toThrow();
   });
+
+  it("validates file_released with target_agent", () => {
+    const event = {
+      type: "file_released",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      agent_name: "Coordinator",
+      target_agent: "BlueLake",
+      file_count: 2,
+    };
+    expect(() => FileReleasedEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("validates file_released with release_all", () => {
+    const event = {
+      type: "file_released",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      agent_name: "Coordinator",
+      release_all: true,
+      file_count: 4,
+    };
+    expect(() => FileReleasedEventSchema.parse(event)).not.toThrow();
+  });
   
   it("validates file_released with context fields", () => {
     const event = {

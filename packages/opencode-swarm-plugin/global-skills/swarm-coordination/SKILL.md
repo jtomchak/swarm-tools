@@ -119,7 +119,7 @@ semantic_memory_store({
   metadata: "auth, oauth, tokens"
 });
 
-// 9. COMPLETE - Auto-releases, runs UBS, records outcome
+// 9. COMPLETE - Auto-releases, records outcome
 swarm_complete({
   project_key: "/abs/path/to/project",
   agent_name: "WorkerName",

@@ -218,18 +218,6 @@ pip install -e .
 cass index  # Run periodically to index new sessions
 ```
 
-### Bug Scanning (UBS)
-
-Auto-runs on subtask completion:
-
-```bash
-git clone https://github.com/Dicklesworthstone/ultimate_bug_scanner
-cd ultimate_bug_scanner
-pip install -e .
-```
-
-Check status: `swarm doctor`
-
 ---
 
 ## Core Concepts

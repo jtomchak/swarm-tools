@@ -7,7 +7,6 @@
  * Supported tools:
  * - semantic-memory: Learning persistence with semantic search
  * - cass: Cross-agent session search for historical context
- * - ubs: Universal bug scanner for pre-commit checks
  * - hive: Git-backed issue tracking (primary)
  * - beads (bd): DEPRECATED - Use hive instead (kept for backward compatibility)
  * - swarm-mail: Embedded multi-agent coordination (PGLite-based)
@@ -26,7 +25,6 @@ export type ToolName =
   | "semantic-memory"
   | "cass"
   | "hivemind" // Unified memory system (ADR-011) - replaces semantic-memory + cass
-  | "ubs"
   | "hive"
   | "beads" // DEPRECATED: Use "hive" instead
   | "swarm-mail"
@@ -229,31 +227,6 @@ const toolCheckers: Record<ToolName, () => Promise<ToolStatus>> = {
     }
   },
 
-  ubs: async () => {
-    const exists = await commandExists("ubs");
-    if (!exists) {
-      return {
-        available: false,
-        checkedAt: new Date().toISOString(),
-        error: "ubs command not found",
-      };
-    }
-
-    try {
-      const result = await Bun.$`ubs doctor`.quiet().nothrow();
-      return {
-        available: result.exitCode === 0,
-        checkedAt: new Date().toISOString(),
-      };
-    } catch (e) {
-      return {
-        available: false,
-        checkedAt: new Date().toISOString(),
-        error: String(e),
-      };
-    }
-  },
-
   hive: async () => {
     const exists = await commandExists("hive");
     if (!exists) {
@@ -338,7 +311,6 @@ const fallbackBehaviors: Record<ToolName, string> = {
   cass: "Decomposition proceeds without historical context from past sessions",
   hivemind:
     "Unified memory unavailable - learnings stored in-memory only, no session history search",
-  ubs: "Subtask completion skips bug scanning - manual review recommended",
   hive: "Swarm cannot track issues - task coordination will be less reliable",
   beads:
     "DEPRECATED: Use hive instead. Swarm cannot track issues - task coordination will be less reliable",
@@ -399,7 +371,6 @@ export async function checkAllTools(): Promise<
     "semantic-memory",
     "cass",
     "hivemind",
-    "ubs",
     "hive",
     "beads",
     "swarm-mail",

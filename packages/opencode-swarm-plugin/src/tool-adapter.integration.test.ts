@@ -38,6 +38,8 @@ import {
   swarmmail_init,
   swarmmail_read_message,
   swarmmail_release,
+  swarmmail_release_all,
+  swarmmail_release_agent,
   swarmmail_reserve,
   swarmmail_send,
 } from "./swarm-mail";
@@ -444,6 +446,141 @@ describe("swarmmail tools adapter wiring", () => {
     expect(result.released_at).toBeTruthy();
 
     clearSessionState(ctx.sessionID);
+  });
+
+  it("swarmmail_release_all clears reservations across agents", async () => {
+    const agent1Ctx = createTestContext();
+    const agent2Ctx = createTestContext();
+    const coordinatorCtx = createTestContext();
+    const testerCtx = createTestContext();
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "AgentOne" },
+      agent1Ctx,
+    );
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "AgentTwo" },
+      agent2Ctx,
+    );
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "Coordinator" },
+      coordinatorCtx,
+    );
+
+    await executeTool(
+      swarmmail_reserve,
+      { paths: ["src/release-all-1.ts"], exclusive: true },
+      agent1Ctx,
+    );
+
+    await executeTool(
+      swarmmail_reserve,
+      { paths: ["src/release-all-2.ts"], exclusive: true },
+      agent2Ctx,
+    );
+
+    const releaseAll = await executeTool<{ released: number }>(
+      swarmmail_release_all,
+      {},
+      coordinatorCtx,
+    );
+
+    expect(releaseAll.released).toBe(2);
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "Verifier" },
+      testerCtx,
+    );
+
+    const reserveAfter = await executeTool<{ conflicts?: unknown[] }>(
+      swarmmail_reserve,
+      { paths: ["src/release-all-1.ts", "src/release-all-2.ts"], exclusive: true },
+      testerCtx,
+    );
+
+    expect(reserveAfter.conflicts ?? []).toHaveLength(0);
+
+    clearSessionState(agent1Ctx.sessionID);
+    clearSessionState(agent2Ctx.sessionID);
+    clearSessionState(coordinatorCtx.sessionID);
+    clearSessionState(testerCtx.sessionID);
+  });
+
+  it("swarmmail_release_agent releases only target agent reservations", async () => {
+    const agent1Ctx = createTestContext();
+    const agent2Ctx = createTestContext();
+    const coordinatorCtx = createTestContext();
+    const testerCtx = createTestContext();
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "AgentAlpha" },
+      agent1Ctx,
+    );
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "AgentBeta" },
+      agent2Ctx,
+    );
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "Coordinator" },
+      coordinatorCtx,
+    );
+
+    await executeTool(
+      swarmmail_reserve,
+      { paths: ["src/release-agent-1.ts"], exclusive: true },
+      agent1Ctx,
+    );
+
+    await executeTool(
+      swarmmail_reserve,
+      { paths: ["src/release-agent-2.ts"], exclusive: true },
+      agent2Ctx,
+    );
+
+    const releaseAgent = await executeTool<{ released: number }>(
+      swarmmail_release_agent,
+      { agent_name: "AgentAlpha" },
+      coordinatorCtx,
+    );
+
+    expect(releaseAgent.released).toBe(1);
+
+    await executeTool(
+      swarmmail_init,
+      { project_path: TEST_DB_PATH, agent_name: "Verifier" },
+      testerCtx,
+    );
+
+    const reserveFreed = await executeTool<{ conflicts?: unknown[] }>(
+      swarmmail_reserve,
+      { paths: ["src/release-agent-1.ts"], exclusive: true },
+      testerCtx,
+    );
+
+    const reserveHeld = await executeTool<{ conflicts?: unknown[] }>(
+      swarmmail_reserve,
+      { paths: ["src/release-agent-2.ts"], exclusive: true },
+      testerCtx,
+    );
+
+    expect(reserveFreed.conflicts ?? []).toHaveLength(0);
+    expect((reserveHeld.conflicts ?? []).length).toBeGreaterThan(0);
+
+    clearSessionState(agent1Ctx.sessionID);
+    clearSessionState(agent2Ctx.sessionID);
+    clearSessionState(coordinatorCtx.sessionID);
+    clearSessionState(testerCtx.sessionID);
   });
 });
 

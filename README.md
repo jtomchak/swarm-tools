@@ -159,7 +159,7 @@ Coordinator reviews worker output before approval. 3-strike rule: after 3 reject
 
 ```bash
 swarm setup     # Install and configure (one-time)
-swarm doctor    # Check dependencies (CASS, UBS, Ollama)
+swarm doctor    # Check dependencies (CASS, Ollama)
 swarm init      # Initialize hive in current project
 swarm config    # Show config file paths
 ```
@@ -593,7 +593,6 @@ See [AGENTS.md](./AGENTS.md) for detailed monorepo guidance.
 | Required                            | Optional                                                                                      |
 | ----------------------------------- | --------------------------------------------------------------------------------------------- |
 | [OpenCode](https://opencode.ai)     | [CASS](https://github.com/Dicklesworthstone/coding_agent_session_search) - historical context |
-|                                     | [UBS](https://github.com/Dicklesworthstone/ultimate_bug_scanner) - bug scanning               |
 |                                     | [Ollama](https://ollama.ai) - local embeddings for semantic memory                            |
 
 > **Note:** Semantic memory is embedded in the plugin. Install Ollama for vector search, or it falls back to full-text search.

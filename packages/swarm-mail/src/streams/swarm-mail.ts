@@ -191,6 +191,19 @@ export interface ReleaseSwarmFilesResult {
   releasedAt: number;
 }
 
+export interface ReleaseSwarmFilesAdminOptions {
+  projectPath: string;
+  actorName: string;
+  dbOverride?: any;
+}
+
+export interface ReleaseSwarmFilesForAgentOptions {
+  projectPath: string;
+  actorName: string;
+  targetAgent: string;
+  dbOverride?: any;
+}
+
 export interface AcknowledgeSwarmOptions {
   projectPath: string;
   messageId: number;
@@ -629,6 +642,74 @@ export async function releaseSwarmFiles(
       agent_name: agentName,
       paths,
       reservation_ids: reservationIds,
+      file_count: releaseCount,
+    }),
+    projectPath,
+    dbOverride,
+  );
+
+  return {
+    released: releaseCount,
+    releasedAt: Date.now(),
+  };
+}
+
+/**
+ * Release ALL reservations in a project (coordinator override)
+ */
+export async function releaseAllSwarmFiles(
+  options: ReleaseSwarmFilesAdminOptions,
+): Promise<ReleaseSwarmFilesResult> {
+  const { projectPath, actorName, dbOverride } = options;
+
+  const currentReservations = await getActiveReservations(
+    projectPath,
+    projectPath,
+    undefined,
+    dbOverride,
+  );
+
+  const releaseCount = currentReservations.length;
+
+  await appendEvent(
+    createEvent("file_released", {
+      project_key: projectPath,
+      agent_name: actorName,
+      release_all: true,
+      file_count: releaseCount,
+    }),
+    projectPath,
+    dbOverride,
+  );
+
+  return {
+    released: releaseCount,
+    releasedAt: Date.now(),
+  };
+}
+
+/**
+ * Release all reservations for a specific agent (coordinator override)
+ */
+export async function releaseSwarmFilesForAgent(
+  options: ReleaseSwarmFilesForAgentOptions,
+): Promise<ReleaseSwarmFilesResult> {
+  const { projectPath, actorName, targetAgent, dbOverride } = options;
+
+  const currentReservations = await getActiveReservations(
+    projectPath,
+    projectPath,
+    targetAgent,
+    dbOverride,
+  );
+
+  const releaseCount = currentReservations.length;
+
+  await appendEvent(
+    createEvent("file_released", {
+      project_key: projectPath,
+      agent_name: actorName,
+      target_agent: targetAgent,
       file_count: releaseCount,
     }),
     projectPath,

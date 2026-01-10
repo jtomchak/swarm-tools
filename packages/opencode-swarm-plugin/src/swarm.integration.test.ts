@@ -1172,10 +1172,9 @@ describe("Tool Availability", () => {
 
   it("checks all tools at once", async () => {
     const availability = await checkAllTools();
-    expect(availability.size).toBe(7); // semantic-memory, cass, ubs, hive, beads, swarm-mail, agent-mail
+    expect(availability.size).toBe(7); // semantic-memory, cass, hivemind, hive, beads, swarm-mail, agent-mail
     expect(availability.has("semantic-memory")).toBe(true);
     expect(availability.has("cass")).toBe(true);
-    expect(availability.has("ubs")).toBe(true);
     expect(availability.has("beads")).toBe(true);
     expect(availability.has("swarm-mail")).toBe(true);
     expect(availability.has("agent-mail")).toBe(true);
@@ -1193,7 +1192,7 @@ describe("Tool Availability", () => {
     resetToolCache();
 
     const result = await withToolFallback(
-      "ubs", // May or may not be available
+      "cass", // May or may not be available
       async () => "action-result",
       () => "fallback-result",
     );
@@ -1228,7 +1227,6 @@ describe("swarm_init", () => {
     const tools = parsed.tool_availability;
     expect(tools).toHaveProperty("semantic-memory");
     expect(tools).toHaveProperty("cass");
-    expect(tools).toHaveProperty("ubs");
     expect(tools).toHaveProperty("beads");
     expect(tools).toHaveProperty("agent-mail");
 
