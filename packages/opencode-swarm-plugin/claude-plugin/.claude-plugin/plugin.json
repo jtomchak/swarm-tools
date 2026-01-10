@@ -5,10 +5,7 @@
   "author": {
     "name": "Joel Hooks"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/joelhooks/opencode-swarm-plugin"
-  },
+  "repository": "https://github.com/joelhooks/opencode-swarm-plugin",
   "keywords": ["multi-agent", "coordination", "tasks", "parallel"],
   "license": "MIT"
 }
