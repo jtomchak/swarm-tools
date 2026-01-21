@@ -60,6 +60,29 @@ Choose **Marketplace → opencode-swarm-plugin → Install**.
 swarm claude install
 ```
 
+**Global install (local source):**
+
+```bash
+# From monorepo root
+bun install
+bun turbo build --filter=opencode-swarm-plugin
+
+# Link this workspace globally
+cd packages/opencode-swarm-plugin
+bun link
+bun link opencode-swarm-plugin
+
+# Generate OpenCode config for your local build
+swarm setup
+```
+
+**Alternative (global install from path):**
+
+```bash
+bun install -g /path/to/swarm-tools/packages/opencode-swarm-plugin
+swarm setup
+```
+
 **Project-local config (standalone):**
 
 ```bash

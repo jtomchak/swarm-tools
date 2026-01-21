@@ -90,6 +90,14 @@ import {
   exportToJSON,
 } from "../src/export-tools.js";
 import {
+  COORDINATOR_MODELS,
+  WORKER_MODELS,
+  LITE_MODELS,
+} from "../src/setup-models.js";
+import { tree } from "./commands/tree.js";
+import { session } from "./commands/session.js";
+import { log } from "./commands/log.js";
+import {
   querySwarmHistory,
   formatSwarmHistory,
   formatSwarmStats,
@@ -466,67 +474,6 @@ function getDecoratedBee(): string {
   // Add decoration to the bee
   return cyan(BEE.replace("bzzzz...", `bzzzz... ${decoration}`));
 }
-
-// ============================================================================
-// Model Configuration
-// ============================================================================
-
-interface ModelOption {
-  value: string;
-  label: string;
-  hint: string;
-}
-
-const COORDINATOR_MODELS: ModelOption[] = [
-  {
-    value: "anthropic/claude-sonnet-4-5",
-    label: "Claude Sonnet 4.5",
-    hint: "Best balance of speed and capability (recommended)",
-  },
-  {
-    value: "anthropic/claude-opus-4-5",
-    label: "Claude Opus 4.5",
-    hint: "Most capable, slower and more expensive",
-  },
-  {
-    value: "openai/gpt-4o",
-    label: "GPT-4o",
-    hint: "Fast, good for most tasks",
-  },
-  {
-    value: "google/gemini-2.0-flash",
-    label: "Gemini 2.0 Flash",
-    hint: "Fast and capable",
-  },
-  {
-    value: "google/gemini-1.5-pro",
-    label: "Gemini 1.5 Pro",
-    hint: "More capable, larger context",
-  },
-];
-
-const WORKER_MODELS: ModelOption[] = [
-  {
-    value: "anthropic/claude-haiku-4-5",
-    label: "Claude Haiku 4.5",
-    hint: "Fast and cost-effective (recommended)",
-  },
-  {
-    value: "anthropic/claude-sonnet-4-5",
-    label: "Claude Sonnet 4.5",
-    hint: "More capable, slower",
-  },
-  {
-    value: "openai/gpt-4o-mini",
-    label: "GPT-4o Mini",
-    hint: "Fast and cheap",
-  },
-  {
-    value: "google/gemini-2.0-flash",
-    label: "Gemini 2.0 Flash",
-    hint: "Fast and capable",
-  },
-];
 
 // ============================================================================
 // Update Checking
@@ -2547,43 +2494,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
 
     const selectedCoordinator = await p.select({
       message: "Select coordinator model (for orchestration/planning):",
-      options: [
-        {
-          value: "anthropic/claude-opus-4-5",
-          label: "Claude Opus 4.5",
-          hint: "Most capable, best for complex orchestration (recommended)",
-        },
-        {
-          value: "anthropic/claude-sonnet-4-5",
-          label: "Claude Sonnet 4.5",
-          hint: "Good balance of speed and capability",
-        },
-        {
-          value: "anthropic/claude-haiku-4-5",
-          label: "Claude Haiku 4.5",
-          hint: "Fast and cost-effective",
-        },
-        {
-          value: "openai/gpt-4o",
-          label: "GPT-4o",
-          hint: "Fast, good for most tasks",
-        },
-        {
-          value: "openai/gpt-4-turbo",
-          label: "GPT-4 Turbo",
-          hint: "Powerful, more expensive",
-        },
-        {
-          value: "google/gemini-2.0-flash",
-          label: "Gemini 2.0 Flash",
-          hint: "Fast and capable",
-        },
-        {
-          value: "google/gemini-1.5-pro",
-          label: "Gemini 1.5 Pro",
-          hint: "More capable",
-        },
-      ],
+      options: COORDINATOR_MODELS,
       initialValue: DEFAULT_COORDINATOR,
     });
 
@@ -2595,43 +2506,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
 
     const selectedWorker = await p.select({
       message: "Select worker model (for task execution):",
-      options: [
-        {
-          value: "anthropic/claude-sonnet-4-5",
-          label: "Claude Sonnet 4.5",
-          hint: "Best balance of speed and capability (recommended)",
-        },
-        {
-          value: "anthropic/claude-haiku-4-5",
-          label: "Claude Haiku 4.5",
-          hint: "Fast and cost-effective",
-        },
-        {
-          value: "anthropic/claude-opus-4-5",
-          label: "Claude Opus 4.5",
-          hint: "Most capable, slower",
-        },
-        {
-          value: "openai/gpt-4o",
-          label: "GPT-4o",
-          hint: "Fast, good for most tasks",
-        },
-        {
-          value: "openai/gpt-4-turbo",
-          label: "GPT-4 Turbo",
-          hint: "Powerful, more expensive",
-        },
-        {
-          value: "google/gemini-2.0-flash",
-          label: "Gemini 2.0 Flash",
-          hint: "Fast and capable",
-        },
-        {
-          value: "google/gemini-1.5-pro",
-          label: "Gemini 1.5 Pro",
-          hint: "More capable",
-        },
-      ],
+      options: WORKER_MODELS,
       initialValue: DEFAULT_WORKER,
     });
 
@@ -2644,28 +2519,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
     // Lite model selection for simple tasks (docs, tests)
     const selectedLite = await p.select({
       message: "Select lite model (for docs, tests, simple edits):",
-      options: [
-        {
-          value: "anthropic/claude-haiku-4-5",
-          label: "Claude Haiku 4.5",
-          hint: "Fast and cost-effective (recommended)",
-        },
-        {
-          value: "anthropic/claude-sonnet-4-5",
-          label: "Claude Sonnet 4.5",
-          hint: "More capable, slower",
-        },
-        {
-          value: "openai/gpt-4o-mini",
-          label: "GPT-4o Mini",
-          hint: "Fast and cheap",
-        },
-        {
-          value: "google/gemini-2.0-flash",
-          label: "Gemini 2.0 Flash",
-          hint: "Fast and capable",
-        },
-      ],
+      options: LITE_MODELS,
       initialValue: DEFAULT_LITE,
     });
 
