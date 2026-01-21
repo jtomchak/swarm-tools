@@ -1008,9 +1008,9 @@ export const hive_update = tool({
   args: {
     id: tool.schema.string().describe("Cell ID or partial hash"),
     status: tool.schema
-      .enum(["open", "in_progress", "blocked", "closed"])
+      .enum(["open", "in_progress", "blocked", "closed", "completed"])
       .optional()
-      .describe("New status"),
+      .describe("New status (completed maps to closed)"),
     description: tool.schema.string().optional().describe("New description"),
     priority: tool.schema
       .number()

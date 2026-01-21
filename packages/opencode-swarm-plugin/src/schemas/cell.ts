@@ -18,6 +18,11 @@ export const CellStatusSchema = z.enum([
 ]);
 export type CellStatus = z.infer<typeof CellStatusSchema>;
 
+const CellStatusInputSchema = z.preprocess(
+  (value) => (value === "completed" ? "closed" : value),
+  CellStatusSchema,
+);
+
 /** Valid cell types */
 export const CellTypeSchema = z.enum([
   "bug",
@@ -104,7 +109,7 @@ export type CellCreateArgs = z.infer<typeof CellCreateArgsSchema>;
 /** Arguments for updating a cell */
 export const CellUpdateArgsSchema = z.object({
   id: z.string(),
-  status: CellStatusSchema.optional(),
+  status: CellStatusInputSchema.optional(),
   description: z.string().optional(),
   priority: z.number().int().min(0).max(3).optional(),
 });
