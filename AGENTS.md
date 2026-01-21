@@ -753,6 +753,9 @@ CLI bin scripts need their imports in `dependencies`, not `devDependencies`. If 
 | Key | Purpose | Used By |
 |-----|---------|---------|
 | `AI_GATEWAY_API_KEY` | Vercel AI Gateway authentication | Evals, LLM calls |
+| `ZHIPU_API_KEY` | Zhipu (Z.ai) API authentication for GLM models | Zhipu provider |
+| `ANTHROPIC_API_KEY` | Anthropic API authentication (falls back to AI_GATEWAY_API_KEY) | Anthropic provider |
+| `OPENAI_API_KEY` | OpenAI API authentication | OpenAI provider (optional) |
 
 ### .env File Location
 
@@ -780,6 +783,159 @@ For scripts that need env vars (like evals), use `bun --env-file`:
 ```
 
 This loads `.env` before spawning the subprocess.
+
+## LLM Providers
+
+The project uses Vercel AI SDK v6 and supports multiple LLM providers via a unified API.
+
+### Supported Providers
+
+**Anthropic** (default provider)
+- Models: `claude-sonnet-4-5`, `claude-haiku-4-5`, `claude-opus-4-5`
+- API Key: `ANTHROPIC_API_KEY` or `AI_GATEWAY_API_KEY`
+- Documentation: https://docs.anthropic.com/
+
+**Zhipu (Z.ai)** - Community Provider
+- Models: `glm-4.7`, `glm-4-plus`, `glm-4-air`, `glm-4-flash`, `glm-3-turbo`
+- API Key: `ZHIPU_API_KEY`
+- Documentation: https://docs.z.ai/api-reference/introduction
+- Community Provider: https://ai-sdk.dev/providers/community-providers/zhipu
+- Default Endpoint: `https://open.bigmodel.cn/api/paas/v4` (Chinese)
+- Z.ai Endpoint: `https://api.z.ai/api/paas/v4` (international)
+- Coding Endpoint: `https://api.z.ai/api/coding/paas/v4` (for GLM Coding Plan)
+
+**OpenAI** (optional)
+- Models: `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo`, etc.
+- API Key: `OPENAI_API_KEY`
+- Documentation: https://platform.openai.com/docs/
+- Installation: `bun add @ai-sdk/openai` (not included by default)
+
+### Usage
+
+```typescript
+import { anthropic, zhipu, zhipuZAI, zhipuCoding, generateText } from "swarm-mail";
+
+// Anthropic model (default)
+const result1 = await generateText({
+  model: anthropic("claude-sonnet-4-5"),
+  prompt: "Hello"
+});
+
+// Zhipu model (Chinese endpoint)
+const result2 = await generateText({
+  model: zhipu("glm-4.7"),
+  prompt: "Hello"
+});
+
+// Zhipu ZAI model (international endpoint)
+const result3 = await generateText({
+  model: zhipuZAI("glm-4.7"),
+  prompt: "Hello"
+});
+
+// Zhipu coding model (uses coding endpoint)
+const resultCoding = await generateText({
+  model: zhipuCoding("glm-4.7"),
+  prompt: "Write a React component"
+});
+```
+
+### Using with getModel() Helper
+
+The `getModel()` function from `swarm-mail` handles provider selection automatically:
+
+```typescript
+import { getModel, generateText, ZHIPU_MODELS } from "swarm-mail";
+
+// Anthropic (no prefix)
+const anthropicModel = getModel("anthropic/claude-sonnet-4-5");
+
+// Zhipu (no prefix or zhipu/ prefix)
+const zhipuModel = getModel("glm-4.7");
+// or
+const zhipuModel2 = getModel("zhipu/glm-4.7");
+
+// Zhipu ZAI model (international endpoint)
+const zhipuZAIModel = getModel("zhipu-zai/glm-4.7");
+
+// Zhipu coding model (uses coding endpoint)
+const zhipuCodingModel = getModel("zhipu-coding/glm-4.7");
+
+// OpenAI (requires @ai-sdk/openai)
+const openaiModel = getModel("openai/gpt-4o");
+
+// Use with generateText
+const result = await generateText({
+  model: zhipuModel,
+  prompt: "Hello"
+});
+```
+
+### Model Constants
+
+```typescript
+import { ANTHROPIC_MODELS, ZHIPU_MODELS, OPENAI_MODELS } from "swarm-mail";
+
+// Anthropic
+ANTHROPIC_MODELS.CLAUDE_SONNET_4_5  // "claude-sonnet-4-5"
+ANTHROPIC_MODELS.CLAUDE_HAIKU_4_5  // "claude-haiku-4-5"
+
+// Zhipu
+ZHIPU_MODELS.GLM_4_7              // "glm-4.7"
+ZHIPU_MODELS.GLM_4_PLUS           // "glm-4-plus"
+ZHIPU_MODELS.GLM_4_AIR            // "glm-4-air"
+
+// OpenAI
+OPENAI_MODELS.GPT_4O            // "gpt-4o"
+OPENAI_MODELS.GPT_4_TURBO       // "gpt-4-turbo"
+```
+
+### Using with getModel() Helper
+
+The `getModel()` function from `swarm-mail` handles provider selection automatically:
+
+```typescript
+import { getModel, generateText, ZAI_MODELS } from "swarm-mail";
+
+// Anthropic (no prefix)
+const anthropicModel = getModel("anthropic/claude-sonnet-4-5");
+
+// Z.ai (no prefix or zai/ prefix)
+const zaiModel = getModel("glm-4.7");
+// or
+const zaiModel2 = getModel("zai/glm-4.7");
+
+// Z.ai coding model (uses coding endpoint)
+const zaiCodingModel = getModel("zai-coding/glm-4.7");
+
+// OpenAI (openai/ prefix)
+const openaiModel = getModel("openai/gpt-4o");
+
+// Use with generateText
+const result = await generateText({
+  model: zaiModel,
+  prompt: "Hello"
+});
+```
+
+### Model Constants
+
+```typescript
+import { ANTHROPIC_MODELS, ZAI_MODELS, OPENAI_MODELS } from "swarm-mail";
+
+// Anthropic
+ANTHROPIC_MODELS.CLAUDE_SONNET_4_5  // "claude-sonnet-4-5"
+ANTHROPIC_MODELS.CLAUDE_HAIKU_4_5  // "claude-haiku-4-5"
+
+// Z.ai
+ZAI_MODELS.GLM_4_7              // "glm-4.7"
+ZAI_MODELS.GLM_4_PLUS           // "glm-4-plus"
+ZAI_MODELS.GLM_4_AIR            // "glm-4-air"
+
+// OpenAI
+OPENAI_MODELS.GPT_4O            // "gpt-4o"
+OPENAI_MODELS.GPT_4_TURBO       // "gpt-4-turbo"
+```
 
 ## Evalite Eval Rig
 
