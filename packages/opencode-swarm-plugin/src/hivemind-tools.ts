@@ -25,7 +25,6 @@ import { tool } from "@opencode-ai/plugin";
 import { Effect, Layer } from "effect";
 import {
 	getSwarmMailLibSQL,
-	createEvent,
 	SessionIndexer,
 	syncMemories,
 	type SessionSearchOptions,
@@ -34,6 +33,7 @@ import {
 	makeOllamaLive,
 	type Ollama,
 } from "swarm-mail";
+import { safeEmitEvent } from "./utils/event-utils";
 import {
 	createMemoryAdapter,
 	type MemoryAdapter,
@@ -145,25 +145,16 @@ export function resetHivemindCache(): void {
 }
 
 /**
- * Emit event to swarm-mail event store
+ * Emit event to swarm-mail event store (deprecated - use safeEmitEvent directly)
+ * @deprecated Use safeEmitEvent from utils/event-utils instead
  */
 async function emitEvent(
 	eventType: string,
 	data: Record<string, unknown>,
 ): Promise<void> {
-	try {
-		const projectPath = cachedProjectPath || process.cwd();
-		const swarmMail = await getSwarmMailLibSQL(projectPath);
-
-		const event = createEvent(eventType as any, {
-			project_key: projectPath,
-			...data,
-		});
-
-		await swarmMail.appendEvent(event);
-	} catch {
-		// Silently fail event emission - don't break the tool
-	}
+	const projectPath = cachedProjectPath || process.cwd();
+	// Call safeEmitEvent with "hivemind" as default tool name for backward compat
+	await safeEmitEvent(eventType, data, "hivemind", projectPath);
 }
 
 // ============================================================================
