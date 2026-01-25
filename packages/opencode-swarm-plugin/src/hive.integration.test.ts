@@ -1131,12 +1131,17 @@ describe("beads integration", () => {
       const { tmpdir } = await import("node:os");
 
       // Create temp project with new cells
+      // Use unique IDs per run to avoid UNIQUE constraint violations in the
+      // global swarm.db (PRIMARY KEY is just `id`, not composite with project_key)
+      const runId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const cellId1 = `bd-import-1-${runId}`;
+      const cellId2 = `bd-import-2-${runId}`;
       const tempProject = join(tmpdir(), `hive-import-test-${Date.now()}`);
       const hiveDir = join(tempProject, ".hive");
       mkdirSync(hiveDir, { recursive: true });
 
       const cell1 = {
-        id: "bd-import-1",
+        id: cellId1,
         title: "Import test 1",
         status: "open" as const,
         priority: 2,
@@ -1149,7 +1154,7 @@ describe("beads integration", () => {
       };
 
       const cell2 = {
-        id: "bd-import-2",
+        id: cellId2,
         title: "Import test 2",
         status: "in_progress" as const,
         priority: 1,
@@ -1179,8 +1184,8 @@ describe("beads integration", () => {
 
       // Verify cells exist in database
       const adapter = await getHiveAdapter(tempProject);
-      const importedCell1 = await adapter.getCell(tempProject, "bd-import-1");
-      const importedCell2 = await adapter.getCell(tempProject, "bd-import-2");
+      const importedCell1 = await adapter.getCell(tempProject, cellId1);
+      const importedCell2 = await adapter.getCell(tempProject, cellId2);
 
       expect(importedCell1).toBeDefined();
       expect(importedCell1!.title).toBe("Import test 1");
@@ -1197,6 +1202,10 @@ describe("beads integration", () => {
       const { join } = await import("node:path");
       const { tmpdir } = await import("node:os");
 
+      // Use unique ID per run to avoid UNIQUE constraint violations in global DB
+      const runId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const cellId = `bd-update-1-${runId}`;
+
       // Create temp project
       const tempProject = join(tmpdir(), `hive-import-test-${Date.now()}`);
       const hiveDir = join(tempProject, ".hive");
@@ -1204,7 +1213,7 @@ describe("beads integration", () => {
 
       // Write JSONL FIRST (before getHiveAdapter to avoid auto-migration)
       const originalCell = {
-        id: "bd-update-1",
+        id: cellId,
         title: "Original title",
         status: "open",
         priority: 2,
@@ -1246,7 +1255,7 @@ describe("beads integration", () => {
       expect(result.errors).toBe(0);
 
       // Verify update
-      const cell = await adapter.getCell(tempProject, "bd-update-1");
+      const cell = await adapter.getCell(tempProject, cellId);
       expect(cell).toBeDefined();
       expect(cell!.title).toBe("Updated title");
       expect(cell!.description).toContain("New description");
@@ -1296,8 +1305,10 @@ describe("beads integration", () => {
         comments: [],
       };
 
+      // Use unique ID per run to avoid UNIQUE constraint violations in global DB
+      const newCellId = `bd-new-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       const newCell = {
-        id: "bd-new",
+        id: newCellId,
         title: "Brand new",
         status: "open" as const,
         priority: 1,
@@ -1318,8 +1329,8 @@ describe("beads integration", () => {
 
       // importJsonlToPGLite() finds:
       // - existingId already exists (updated)
-      // - bd-new is new (imported)
-      expect(result.imported).toBe(1); // bd-new
+      // - newCellId is new (imported)
+      expect(result.imported).toBe(1); // new cell
       expect(result.updated).toBe(1); // existing cell
       expect(result.errors).toBe(0);
 
@@ -1338,8 +1349,10 @@ describe("beads integration", () => {
       const hiveDir = join(tempProject, ".hive");
       mkdirSync(hiveDir, { recursive: true });
 
+      // Use unique ID per run to avoid UNIQUE constraint violations in global DB
+      const validCellId = `bd-valid-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       const validCell = {
-        id: "bd-valid",
+        id: validCellId,
         title: "Valid",
         status: "open",
         priority: 2,
@@ -1361,7 +1374,10 @@ describe("beads integration", () => {
 
       const result = await importJsonlToPGLite(tempProject);
 
-      expect(result.imported).toBe(1); // Only the valid one
+      // Auto-migration runs first inside importJsonlToPGLite (via getHiveAdapter).
+      // It imports the valid cell, then importJsonlToPGLite sees it as existing → updated.
+      // The 2 invalid JSON lines are counted as errors either way.
+      expect(result.imported + result.updated).toBe(1); // Only the valid one
       expect(result.errors).toBe(2); // Two invalid lines
 
       // Cleanup
@@ -1407,7 +1423,7 @@ describe("beads integration", () => {
       
       // Create local repo
       mkdirSync(tempProject, { recursive: true });
-      execSync("git init", { cwd: tempProject });
+      execSync("git init -b main", { cwd: tempProject });
       execSync('git config user.email "test@example.com"', { cwd: tempProject });
       execSync('git config user.name "Test User"', { cwd: tempProject });
       execSync(`git remote add origin ${remoteProject}`, { cwd: tempProject });

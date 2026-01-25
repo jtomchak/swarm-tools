@@ -1387,8 +1387,13 @@ describe("getPromptInsights", () => {
 			// This test verifies the full flow: 
 			// formatSubtaskPromptV2 → getWorkerInsights → getFileFailureHistory → formatFileHistoryWarnings
 			
-			// First, seed the database with review_feedback events
-			const { createLibSQLAdapter, createSwarmMailAdapter, getGlobalDbPath } = await import("swarm-mail");
+			// CRITICAL: Close all cached adapters first to prevent CLIENT_CLOSED errors
+			// when running in the full test suite. Other tests may have closed the
+			// global adapter, leaving stale entries in the instances cache.
+			const { createLibSQLAdapter, createSwarmMailAdapter, getGlobalDbPath, closeAllSwarmMailLibSQL } = await import("swarm-mail");
+			await closeAllSwarmMailLibSQL();
+			
+			// Now seed the database with review_feedback events using a fresh connection
 			const globalDbPath = getGlobalDbPath();
 			const dbAdapter = await createLibSQLAdapter({ url: `file:${globalDbPath}` });
 			const testSwarmMail = createSwarmMailAdapter(dbAdapter, "test-integration");
@@ -1430,6 +1435,11 @@ describe("getPromptInsights", () => {
 					}),
 				],
 			);
+			
+			// Close the seeding adapter and clear caches so formatSubtaskPromptV2
+			// creates a fresh adapter that will see the seeded data
+			await testSwarmMail.close();
+			await closeAllSwarmMailLibSQL();
 			
 			// Now call formatSubtaskPromptV2 with those files
 			const { formatSubtaskPromptV2 } = await import("./swarm-prompts");

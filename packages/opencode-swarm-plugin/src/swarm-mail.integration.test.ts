@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getSwarmMailLibSQL,
   clearAdapterCache,
+  closeAllSwarmMailLibSQL,
 } from "swarm-mail";
 import {
   swarmmail_init,
@@ -29,6 +30,7 @@ import {
   swarmmail_health,
   clearSessionState,
 } from "./swarm-mail";
+import { setCoordinatorContext, clearCoordinatorContext } from "./planning-guardrails";
 
 // ============================================================================
 // Test Configuration
@@ -87,13 +89,15 @@ beforeEach(async () => {
   TEST_DB_PATH = trackPath(testDbPath());
   // Create directory for test database
   await mkdir(TEST_DB_PATH, { recursive: true });
-  // Clear adapter cache to ensure clean state
-  clearAdapterCache();
+  // Close ALL adapters (both instances Map AND store cache) to ensure clean state.
+  // clearAdapterCache() alone only clears the store.ts cache, not the
+  // libsql.convenience.ts instances Map — leaving stale/closed adapters.
+  await closeAllSwarmMailLibSQL();
 });
 
 afterEach(async () => {
-  // Clear all cached adapters
-  clearAdapterCache();
+  // Close ALL adapters to prevent CLIENT_CLOSED errors in subsequent tests
+  await closeAllSwarmMailLibSQL();
   
   // Clean up all test database directories
   for (const path of testPaths) {
@@ -792,6 +796,9 @@ describe("swarm-mail integration (embedded)", () => {
       const coordinatorCtx = createTestContext();
       const verifierCtx = createTestContext();
 
+      // Set coordinator context so release_all is allowed
+      setCoordinatorContext({ isCoordinator: true, sessionId: coordinatorCtx.sessionID });
+
       await executeTool(
         swarmmail_init,
         { project_path: TEST_DB_PATH, agent_name: "AdminAgentA" },
@@ -848,6 +855,7 @@ describe("swarm-mail integration (embedded)", () => {
       clearSessionState(agent2Ctx.sessionID);
       clearSessionState(coordinatorCtx.sessionID);
       clearSessionState(verifierCtx.sessionID);
+      clearCoordinatorContext(coordinatorCtx.sessionID);
     });
 
     it("releases reservations for a specific agent", async () => {
@@ -855,6 +863,9 @@ describe("swarm-mail integration (embedded)", () => {
       const agent2Ctx = createTestContext();
       const coordinatorCtx = createTestContext();
       const verifierCtx = createTestContext();
+
+      // Set coordinator context so release_agent is allowed
+      setCoordinatorContext({ isCoordinator: true, sessionId: coordinatorCtx.sessionID });
 
       await executeTool(
         swarmmail_init,
@@ -919,6 +930,7 @@ describe("swarm-mail integration (embedded)", () => {
       clearSessionState(agent2Ctx.sessionID);
       clearSessionState(coordinatorCtx.sessionID);
       clearSessionState(verifierCtx.sessionID);
+      clearCoordinatorContext(coordinatorCtx.sessionID);
     });
   });
 
