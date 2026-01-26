@@ -682,6 +682,10 @@ Scripts run in the skill's directory with the project directory as an argument.`
       .array(tool.schema.string())
       .optional()
       .describe("Additional arguments to pass to the script"),
+    timeout_ms: tool.schema
+      .number()
+      .optional()
+      .describe("Timeout in milliseconds (default: 60000)"),
   },
   async execute(args, ctx) {
     console.warn('[DEPRECATED] skills_execute is deprecated. OpenCode now provides native skills support. This tool will be removed in a future version.');
@@ -698,7 +702,7 @@ Scripts run in the skill's directory with the project directory as an argument.`
     const scriptPath = join(skill.directory, "scripts", args.script);
     const scriptArgs = args.args || [];
 
-    const TIMEOUT_MS = 60_000; // 60 second timeout
+    const TIMEOUT_MS = args.timeout_ms ?? 60_000; // 60 second default timeout
     const proc = Bun.spawn(
       [scriptPath, skillsProjectDirectory, ...scriptArgs],
       {
