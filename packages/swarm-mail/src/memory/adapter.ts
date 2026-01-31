@@ -474,10 +474,10 @@ export function createMemoryAdapter(db: SwarmDb, config: MemoryConfig) {
 
   /**
    * Extract entities and relationships from content, then store and link them
-   * 
+   *
    * Implements proactive extraction: automatically builds knowledge graph as memories are stored.
    * Uses entity-extraction service (extractEntitiesAndRelationships, storeEntities, etc.)
-   * 
+   *
    * Graceful degradation: LLM failures return empty results, never throw.
    */
   const extractAndLinkEntities = async (
@@ -486,12 +486,17 @@ export function createMemoryAdapter(db: SwarmDb, config: MemoryConfig) {
   ): Promise<void> => {
     try {
       // Import extraction functions (dynamic to avoid circular deps)
-      const { 
+      const {
         extractEntitiesAndRelationships,
         storeEntities,
         storeRelationships,
         linkMemoryToEntities
       } = await import("./entity-extraction.js");
+
+      const {
+        extractTaxonomy,
+        storeTaxonomy
+      } = await import("./taxonomy-extraction.js");
 
       // Get raw libSQL client for entity-extraction functions
       const client = db.run(sql`SELECT 1`); // Access underlying client
@@ -555,6 +560,29 @@ export function createMemoryAdapter(db: SwarmDb, config: MemoryConfig) {
 
       if (relationshipsToStore.length > 0) {
         await storeRelationships(relationshipsToStore, memoryId, libsqlClient);
+      }
+
+      // Extract and store SKOS taxonomy relationships
+      try {
+        console.log(`[Taxonomy] Extracting relationships for ${storedEntities.length} entities`);
+
+        const taxonomyResult = await extractTaxonomy(content, extraction.entities, {
+          model: "anthropic/claude-haiku-4-5",
+          apiKey: process.env.AI_GATEWAY_API_KEY,
+        });
+
+        if (taxonomyResult.relationships.length > 0) {
+          console.log(`[Taxonomy] Found ${taxonomyResult.relationships.length} relationships, storing...`);
+
+          const stored = await storeTaxonomy(taxonomyResult.relationships, libsqlClient);
+
+          console.log(`[Taxonomy] Stored ${stored.length} taxonomy relationships`);
+        } else {
+          console.log(`[Taxonomy] No taxonomy relationships found`);
+        }
+      } catch (taxonomyError) {
+        // Graceful degradation: taxonomy extraction is optional, don't block memory storage
+        console.warn("[Taxonomy] Extraction failed, continuing without taxonomy:", taxonomyError);
       }
     } catch (error) {
       // Graceful degradation: log error but don't throw (keeps store() working)

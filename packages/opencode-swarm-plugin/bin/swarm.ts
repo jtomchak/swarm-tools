@@ -4395,15 +4395,18 @@ ${cyan("Cell Management:")}
   swarm cells --json                   Raw JSON output (array, no wrapper)
 
 ${cyan("Memory Management (Hivemind):")}
-  swarm memory store <info> [--tags <tags>]    Store a learning/memory
-  swarm memory find <query> [--limit <n>]      Search all memories (semantic + FTS)
-  swarm memory get <id>                        Get specific memory by ID
-  swarm memory remove <id>                     Delete outdated/incorrect memory
-  swarm memory validate <id>                   Confirm accuracy (resets 90-day decay)
-  swarm memory stats                           Show database statistics
-  swarm memory index                           Index AI sessions (use hivemind_index tool)
-  swarm memory sync                            Sync to .hive/memories.jsonl (use hivemind_sync tool)
-  swarm memory <command> --json                Output JSON for all commands
+  swarm memory store <info> [--tags <tags>]              Store a learning/memory
+  swarm memory find <query> [--limit <n>]                Search all memories (semantic + FTS)
+  swarm memory get <id>                                  Get specific memory by ID
+  swarm memory remove <id>                               Delete outdated/incorrect memory
+  swarm memory validate <id>                             Confirm accuracy (resets 90-day decay)
+  swarm memory stats                                     Show database statistics
+  swarm memory index                                     Index AI sessions (use hivemind_index tool)
+  swarm memory sync                                      Sync to .hive/memories.jsonl (use hivemind_sync tool)
+  swarm memory entities [--type <type>]                  List all entities (optionally filtered by type)
+  swarm memory entity <name>                             Show entity details with taxonomy relationships
+  swarm memory taxonomy <entity> [--direction <dir>]     Show taxonomy tree (broader|narrower|related)
+  swarm memory <command> --json                          Output JSON for all commands
 
 ${cyan("Log Viewing:")}
   swarm log                            Tail recent logs (last 50 lines)
@@ -7394,19 +7397,25 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
   info?: string;
   query?: string;
   id?: string;
+  name?: string;
   tags?: string;
   limit?: number;
   collection?: string;
+  type?: string;
+  direction?: string;
 } {
   let json = false;
   let info: string | undefined;
   let query: string | undefined;
   let id: string | undefined;
+  let name: string | undefined;
   let tags: string | undefined;
   let limit: number | undefined;
   let collection: string | undefined;
+  let type: string | undefined;
+  let direction: string | undefined;
 
-  // First positional arg for store/find/get/remove/validate
+  // First positional arg for store/find/get/remove/validate/entity/taxonomy
   if (args.length > 0 && !args[0].startsWith("--")) {
     if (subcommand === "store") {
       info = args[0];
@@ -7414,6 +7423,8 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
       query = args[0];
     } else if (subcommand === "get" || subcommand === "remove" || subcommand === "validate") {
       id = args[0];
+    } else if (subcommand === "entity" || subcommand === "taxonomy") {
+      name = args[0];
     }
   }
 
@@ -7428,15 +7439,19 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
       if (!isNaN(val)) limit = val;
     } else if (arg === "--collection" && i + 1 < args.length) {
       collection = args[++i];
+    } else if (arg === "--type" && i + 1 < args.length) {
+      type = args[++i];
+    } else if (arg === "--direction" && i + 1 < args.length) {
+      direction = args[++i];
     }
   }
 
-  return { json, info, query, id, tags, limit, collection };
+  return { json, info, query, id, name, tags, limit, collection, type, direction };
 }
 
 /**
  * Memory command - unified interface to memory operations
- * 
+ *
  * Commands:
  *   swarm memory store <info> [--tags <tags>]
  *   swarm memory find <query> [--limit <n>] [--collection <name>]
@@ -7446,6 +7461,9 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
  *   swarm memory stats
  *   swarm memory index
  *   swarm memory sync
+ *   swarm memory entities [--type <type>]
+ *   swarm memory entity <name>
+ *   swarm memory taxonomy <entity> [--direction broader|narrower|related]
  */
 async function memory() {
   const subcommand = process.argv[3];
@@ -7645,6 +7663,237 @@ async function memory() {
         break;
       }
 
+      case "entities": {
+        const { createClient } = await import("@libsql/client");
+        const client = createClient({ url: dbUrl });
+
+        const { getEntitiesByType } = await import("swarm-mail");
+
+        let query = "SELECT id, name, entity_type, created_at FROM entities";
+        const params: string[] = [];
+
+        if (parsed.type) {
+          query += " WHERE entity_type = ?";
+          params.push(parsed.type);
+        }
+
+        query += " ORDER BY created_at DESC";
+
+        const result = await client.execute(query, params);
+
+        if (parsed.json) {
+          console.log(JSON.stringify({
+            success: true,
+            entities: result.rows.map((row) => ({
+              id: row.id,
+              name: row.name,
+              entityType: row.entity_type,
+              createdAt: row.created_at,
+            })),
+          }));
+        } else {
+          p.intro("swarm memory entities");
+          if (result.rows.length === 0) {
+            p.log.warn("No entities found");
+          } else {
+            console.log();
+            for (const row of result.rows) {
+              console.log(cyan(`[${row.id}] ${row.name}`));
+              console.log(dim(`  Type: ${row.entity_type}`));
+              console.log(dim(`  Created: ${new Date(row.created_at as string).toLocaleDateString()}`));
+            }
+          }
+          p.outro(`Found ${result.rows.length} entit${result.rows.length === 1 ? "y" : "ies"}`);
+        }
+
+        client.close();
+        break;
+      }
+
+      case "entity": {
+        if (!parsed.name) {
+          console.error("Usage: swarm memory entity <name>");
+          process.exit(1);
+        }
+
+        const { createClient } = await import("@libsql/client");
+        const client = createClient({ url: dbUrl });
+
+        const { getTaxonomyForEntity } = await import("swarm-mail");
+
+        // Lookup entity by name (case-insensitive)
+        const entityResult = await client.execute(
+          "SELECT id, name, entity_type, created_at FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
+          [parsed.name]
+        );
+
+        if (entityResult.rows.length === 0) {
+          if (parsed.json) {
+            console.log(JSON.stringify({ success: false, error: "Entity not found" }));
+          } else {
+            p.intro("swarm memory entity");
+            p.log.error(`Entity "${parsed.name}" not found`);
+            p.outro("Aborted");
+          }
+          client.close();
+          process.exit(1);
+        }
+
+        const entity = entityResult.rows[0];
+        const entityId = entity.id as string;
+
+        // Get taxonomy relationships
+        const taxonomy = await getTaxonomyForEntity(entityId, client);
+
+        // Fetch related entity names
+        const relatedIds = new Set<string>();
+        for (const rel of taxonomy) {
+          relatedIds.add(rel.entityId);
+          relatedIds.add(rel.relatedEntityId);
+        }
+
+        const relatedEntities = new Map<string, string>();
+        for (const id of relatedIds) {
+          const res = await client.execute("SELECT name FROM entities WHERE id = ? LIMIT 1", [id]);
+          if (res.rows.length > 0) {
+            relatedEntities.set(id, res.rows[0].name as string);
+          }
+        }
+
+        if (parsed.json) {
+          console.log(JSON.stringify({
+            success: true,
+            entity: {
+              id: entity.id,
+              name: entity.name,
+              entityType: entity.entity_type,
+              createdAt: entity.created_at,
+            },
+            taxonomy: taxonomy.map((rel) => ({
+              id: rel.id,
+              subjectEntity: relatedEntities.get(rel.entityId),
+              relationshipType: rel.relationshipType,
+              relatedEntity: relatedEntities.get(rel.relatedEntityId),
+            })),
+          }));
+        } else {
+          p.intro(`swarm memory entity: ${entity.name}`);
+          console.log();
+          console.log(cyan("Entity Details:"));
+          console.log(`  ID: ${entity.id}`);
+          console.log(`  Name: ${entity.name}`);
+          console.log(`  Type: ${entity.entity_type}`);
+          console.log(`  Created: ${new Date(entity.created_at as string).toLocaleDateString()}`);
+
+          if (taxonomy.length > 0) {
+            console.log();
+            console.log(cyan("Taxonomy Relationships:"));
+            for (const rel of taxonomy) {
+              const subject = relatedEntities.get(rel.entityId);
+              const related = relatedEntities.get(rel.relatedEntityId);
+              console.log(`  ${subject} ${dim(`--[${rel.relationshipType}]-->`)} ${related}`);
+            }
+          } else {
+            console.log();
+            console.log(dim("  No taxonomy relationships"));
+          }
+
+          p.outro("Done");
+        }
+
+        client.close();
+        break;
+      }
+
+      case "taxonomy": {
+        if (!parsed.name) {
+          console.error("Usage: swarm memory taxonomy <entity> [--direction broader|narrower|related]");
+          process.exit(1);
+        }
+
+        const { createClient } = await import("@libsql/client");
+        const client = createClient({ url: dbUrl });
+
+        const { getTaxonomyForEntity, findByTaxonomy } = await import("swarm-mail");
+
+        // Lookup entity by name (case-insensitive)
+        const entityResult = await client.execute(
+          "SELECT id, name FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
+          [parsed.name]
+        );
+
+        if (entityResult.rows.length === 0) {
+          if (parsed.json) {
+            console.log(JSON.stringify({ success: false, error: "Entity not found" }));
+          } else {
+            p.intro("swarm memory taxonomy");
+            p.log.error(`Entity "${parsed.name}" not found`);
+            p.outro("Aborted");
+          }
+          client.close();
+          process.exit(1);
+        }
+
+        const entity = entityResult.rows[0];
+        const entityId = entity.id as string;
+
+        let relatedIds: string[];
+
+        if (parsed.direction === "broader" || parsed.direction === "narrower" || parsed.direction === "related") {
+          // Filter by relationship type
+          relatedIds = await findByTaxonomy(entityId, parsed.direction, client);
+        } else {
+          // Get all relationships
+          const taxonomy = await getTaxonomyForEntity(entityId, client);
+          relatedIds = taxonomy
+            .filter((rel) => rel.entityId === entityId)
+            .map((rel) => rel.relatedEntityId);
+        }
+
+        // Fetch related entity details
+        const relatedEntities: Array<{ id: string; name: string; relationshipType?: string }> = [];
+        for (const id of relatedIds) {
+          const res = await client.execute("SELECT name FROM entities WHERE id = ? LIMIT 1", [id]);
+          if (res.rows.length > 0) {
+            relatedEntities.push({
+              id,
+              name: res.rows[0].name as string,
+            });
+          }
+        }
+
+        if (parsed.json) {
+          console.log(JSON.stringify({
+            success: true,
+            entity: {
+              id: entity.id,
+              name: entity.name,
+            },
+            direction: parsed.direction || "all",
+            related: relatedEntities,
+          }));
+        } else {
+          const directionLabel = parsed.direction
+            ? `${parsed.direction} relationships`
+            : "all relationships";
+          p.intro(`swarm memory taxonomy: ${entity.name} (${directionLabel})`);
+
+          if (relatedEntities.length === 0) {
+            p.log.warn("No related entities found");
+          } else {
+            console.log();
+            for (const rel of relatedEntities) {
+              console.log(`  ${cyan(rel.name)} ${dim(`[${rel.id}]`)}`);
+            }
+          }
+
+          p.outro(`Found ${relatedEntities.length} related entit${relatedEntities.length === 1 ? "y" : "ies"}`);
+        }
+
+        client.close();
+        break;
+      }
+
       case "sync": {
         // Sync is a stub - actual sync happens via .hive/memories.jsonl
         // which is handled by hivemind_sync tool
@@ -7665,17 +7914,20 @@ async function memory() {
         console.error("Usage: swarm memory <subcommand> [options]");
         console.error("");
         console.error("Subcommands:");
-        console.error("  store <info> [--tags <tags>]         Store a memory");
-        console.error("  find <query> [--limit <n>]           Search memories");
-        console.error("  get <id>                             Get memory by ID");
-        console.error("  remove <id>                          Delete memory");
-        console.error("  validate <id>                        Reset decay timer");
-        console.error("  stats                                Show database stats");
-        console.error("  index                                Index sessions (use hivemind_index)");
-        console.error("  sync                                 Sync to git (use hivemind_sync)");
+        console.error("  store <info> [--tags <tags>]                  Store a memory");
+        console.error("  find <query> [--limit <n>]                    Search memories");
+        console.error("  get <id>                                      Get memory by ID");
+        console.error("  remove <id>                                   Delete memory");
+        console.error("  validate <id>                                 Reset decay timer");
+        console.error("  stats                                         Show database stats");
+        console.error("  index                                         Index sessions (use hivemind_index)");
+        console.error("  sync                                          Sync to git (use hivemind_sync)");
+        console.error("  entities [--type <type>]                      List all entities (optionally filtered by type)");
+        console.error("  entity <name>                                 Show entity details with taxonomy relationships");
+        console.error("  taxonomy <entity> [--direction <dir>]         Show taxonomy tree (direction: broader|narrower|related)");
         console.error("");
         console.error("Global options:");
-        console.error("  --json                               Output JSON");
+        console.error("  --json                                        Output JSON");
         process.exit(1);
       }
     }

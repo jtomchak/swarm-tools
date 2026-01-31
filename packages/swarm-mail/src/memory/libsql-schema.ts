@@ -107,6 +107,14 @@ export async function createLibSQLMemorySchema(db: Client): Promise<void> {
     await db.execute(`ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'`);
   } catch { /* column already exists */ }
 
+  // SKOS Taxonomy fields for entities table
+  try {
+    await db.execute(`ALTER TABLE entities ADD COLUMN pref_label TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    await db.execute(`ALTER TABLE entities ADD COLUMN alt_labels TEXT`);
+  } catch { /* column already exists */ }
+
   // ========================================================================
   // Memory Links Table (Zettelkasten-style bidirectional connections)
   // ========================================================================
@@ -131,6 +139,8 @@ export async function createLibSQLMemorySchema(db: Client): Promise<void> {
       name TEXT NOT NULL,
       entity_type TEXT NOT NULL,
       canonical_name TEXT,
+      pref_label TEXT,
+      alt_labels TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(name, entity_type)
@@ -162,6 +172,20 @@ export async function createLibSQLMemorySchema(db: Client): Promise<void> {
       entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
       role TEXT,
       PRIMARY KEY(memory_id, entity_id)
+    )
+  `);
+
+  // ========================================================================
+  // Entity Taxonomy Table (SKOS-based relationships)
+  // ========================================================================
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS entity_taxonomy (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      related_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      relationship_type TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(entity_id, related_entity_id, relationship_type)
     )
   `);
 
@@ -209,8 +233,24 @@ export async function createLibSQLMemorySchema(db: Client): Promise<void> {
   `);
 
   await db.execute(`
-    CREATE INDEX IF NOT EXISTS idx_relationships_predicate 
+    CREATE INDEX IF NOT EXISTS idx_relationships_predicate
     ON relationships(predicate)
+  `);
+
+  // Entity taxonomy indexes
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_entity_taxonomy_entity
+    ON entity_taxonomy(entity_id)
+  `);
+
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_entity_taxonomy_related
+    ON entity_taxonomy(related_entity_id)
+  `);
+
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_entity_taxonomy_type
+    ON entity_taxonomy(relationship_type)
   `);
 
   // Vector index for cosine similarity search
@@ -293,6 +333,7 @@ export async function dropLibSQLMemorySchema(db: Client): Promise<void> {
   // Drop tables in dependency order (children first, then parents)
   await db.execute("DROP TABLE IF EXISTS memory_entities");
   await db.execute("DROP TABLE IF EXISTS relationships");
+  await db.execute("DROP TABLE IF EXISTS entity_taxonomy");
   await db.execute("DROP TABLE IF EXISTS memory_links");
   await db.execute("DROP TABLE IF EXISTS entities");
   await db.execute("DROP TABLE IF EXISTS memories");
@@ -347,10 +388,10 @@ export async function validateLibSQLMemorySchema(db: Client): Promise<boolean> {
 
     // Check new tables exist
     const newTables = await db.execute(`
-      SELECT name FROM sqlite_master 
-      WHERE type='table' AND name IN ('memory_links', 'entities', 'relationships', 'memory_entities')
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND name IN ('memory_links', 'entities', 'relationships', 'memory_entities', 'entity_taxonomy')
     `);
-    if (newTables.rows.length !== 4) return false;
+    if (newTables.rows.length !== 5) return false;
 
     return true;
   } catch {

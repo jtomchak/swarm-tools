@@ -45,12 +45,17 @@ export interface Relationship {
   createdAt: Date;
 }
 
+/** Extracted entity from LLM (before DB storage) */
+export interface ExtractedEntity {
+  name: string;
+  entityType: EntityType;
+  prefLabel?: string;
+  altLabels?: string[];
+}
+
 /** Result from LLM extraction (before DB storage) */
 export interface ExtractionResult {
-  entities: Array<{
-    name: string;
-    entityType: EntityType;
-  }>;
+  entities: ExtractedEntity[];
   relationships: Array<{
     subjectName: string;
     predicate: string;
@@ -69,6 +74,18 @@ const EntitySchema = z.object({
     .enum(["person", "project", "technology", "concept"])
     .describe(
       "Type of entity: person (people), project (software projects), technology (languages/frameworks), concept (abstract ideas)"
+    ),
+  prefLabel: z
+    .string()
+    .optional()
+    .describe(
+      "Preferred label (SKOS prefLabel) - the canonical/standard name for this entity"
+    ),
+  altLabels: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Alternative labels (SKOS altLabel) - synonyms, abbreviations, or alternative names"
     ),
 });
 
@@ -137,6 +154,12 @@ export async function extractEntitiesAndRelationships(
       prompt: `Extract named entities and relationships from the following text.
 
 Entities should be people, projects, technologies, or concepts mentioned.
+For each entity, extract:
+- name: The primary name used in the text
+- entityType: person, project, technology, or concept
+- prefLabel (optional): The preferred/canonical name if different from how it appears in text
+- altLabels (optional): Synonyms, abbreviations, or alternative names (e.g., "TS" for "TypeScript")
+
 Relationships should be clear subject-predicate-object triples.
 
 Text: ${content}`,
@@ -216,10 +239,19 @@ export async function storeEntities(
 
       await db.execute(
         `
-        INSERT INTO entities (id, name, entity_type, canonical_name, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO entities (id, name, entity_type, canonical_name, pref_label, alt_labels, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
-        [id, entity.name, entity.entityType, entity.canonicalName ?? null, now, now]
+        [
+          id,
+          entity.name,
+          entity.entityType,
+          entity.canonicalName ?? null,
+          (entity as any).prefLabel ?? null,
+          (entity as any).altLabels ? JSON.stringify((entity as any).altLabels) : null,
+          now,
+          now,
+        ]
       );
 
       storedEntity = {

@@ -164,6 +164,7 @@ const SWARM_TOOLS = [
         fts: { type: "boolean", description: "Use full-text search instead of semantic" },
         expand: { type: "boolean", description: "Return expanded context" },
         collection: { type: "string", description: "Filter by collection" },
+        decayTier: { type: "string", description: "Filter by decay tier: hot, warm, cold, stale" },
         project_key: { type: "string", description: "Override project scope (default: current working directory)" },
       },
       required: ["query"],
@@ -181,6 +182,9 @@ const SWARM_TOOLS = [
         tags: { type: "string", description: "Comma-separated tags" },
         collection: { type: "string", description: "Collection name (default: 'default')" },
         confidence: { type: "number", description: "Confidence score 0-1" },
+        extractEntities: { type: "boolean", description: "Extract entities from content" },
+        autoTag: { type: "boolean", description: "Auto-tag based on content analysis" },
+        autoLink: { type: "boolean", description: "Auto-link to related memories" },
         project_key: { type: "string", description: "Override project scope (default: current working directory)" },
       },
       required: ["information"],
@@ -448,6 +452,7 @@ interface MemoryResult {
     collection?: string;
     createdAt?: string;
     confidence?: number;
+    decayTier?: string;
   };
   score: number;
   matchType: string;
@@ -542,6 +547,15 @@ const CAPTURE_PATTERNS = [
   /\b(project|task|todo|deadline|meeting)\b/i,
 ];
 
+// Patterns that indicate entity-rich content (names, projects, technologies)
+const ENTITY_PATTERNS = [
+  /\b([A-Z][a-z]+ [A-Z][a-z]+)\b/, // Proper names (e.g., "John Smith")
+  /\b(React|Next\.js|TypeScript|JavaScript|Python|Java|AWS|Azure|GCP)\b/i, // Technologies
+  /\b(GitHub|GitLab|Jira|Slack|Notion|Figma)\b/i, // Tools/platforms
+  /\b(project|repository|repo|codebase|app|application|system)\s+['""]?([A-Z][a-z-]+)/i, // Named projects
+  /\b([A-Z][A-Z0-9_-]{2,})\b/, // Acronyms/constants (e.g., "API", "DB_HOST")
+];
+
 const SKIP_PATTERNS = [
   /^(ok|okay|sure|yes|no|thanks|thank you|got it|understood)\.?$/i,
   /^(hi|hello|hey|bye|goodbye)\.?$/i,
@@ -560,6 +574,14 @@ function shouldCapture(text: string): boolean {
   return text.length > 200;
 }
 
+function isEntityRich(text: string): boolean {
+  let matches = 0;
+  for (const pattern of ENTITY_PATTERNS) {
+    if (pattern.test(text)) matches++;
+  }
+  return matches >= 2; // At least 2 entity patterns
+}
+
 function detectTags(text: string): string[] {
   const tags: string[] = ["auto-captured"];
   const lower = text.toLowerCase();
@@ -576,13 +598,122 @@ function formatRecallContext(results: MemoryResult[]): string {
     const tags = r.memory.metadata?.tags?.join(", ") || "general";
     const score = Math.round(r.score * 100);
     const content = r.memory.content.slice(0, 300);
-    return `- [${tags}] ${content}${content.length >= 300 ? "..." : ""} (${score}%)`;
+    const decayBadge = r.memory.decayTier === "hot" ? "🔥" : r.memory.decayTier === "warm" ? "🌡️" : r.memory.decayTier === "cold" ? "❄️" : "💤";
+    const tier = r.memory.decayTier || "unknown";
+    return `- ${decayBadge} [${tier}] [${tags}] ${content}${content.length >= 300 ? "..." : ""} (${score}%)`;
   });
   return `<hivemind-context>
 Relevant memories:
 ${lines.join("\n")}
 Use naturally when relevant.
 </hivemind-context>`;
+}
+
+// ============================================================================
+// HATEOAS Hint Generators
+// ============================================================================
+
+/**
+ * Add contextual hints to hivemind_find responses
+ */
+function addHivemindFindHints(resultJson: string, params: Record<string, unknown>): string {
+  try {
+    const result = JSON.parse(resultJson);
+    if (!result.success) return resultJson;
+
+    const data = result.data || result;
+    const results = data.results || [];
+    const count = results.length;
+    const query = params.query as string;
+    const limit = (params.limit as number) || 5;
+    const fts = params.fts as boolean;
+    const expand = params.expand as boolean;
+
+    const hints: string[] = [];
+
+    // Result count hints
+    if (count === 0) {
+      hints.push(`No results found. Try: hivemind_find({query: '<broader topic>'}) or add fts: true for full-text search`);
+    } else if (count === 1) {
+      hints.push(`Low results (1 match). Try fts: true for full-text search or broaden your query`);
+    } else if (count >= limit) {
+      hints.push(`Found ${count} results (limit reached). For more results, increase limit or narrow your query`);
+    } else if (count > 1 && count < 5) {
+      hints.push(`Found ${count} results. For more context try: hivemind_find({query: '${query} gotchas'})`);
+    }
+
+    // Feature suggestion hints
+    if (!expand && count > 0) {
+      hints.push(`Tip: Use expand: true for full content with surrounding context`);
+    }
+
+    if (!fts && count < 3) {
+      hints.push(`Tip: Try fts: true for literal/full-text matching instead of semantic search`);
+    }
+
+    // Add related query suggestions based on results
+    if (count > 0) {
+      const firstResult = results[0];
+      const tags = firstResult.metadata?.tags || [];
+      if (tags.length > 0) {
+        const tag = tags[0];
+        hints.push(`Related: Try hivemind_find({query: '${tag}'}) to explore similar memories`);
+      }
+    }
+
+    // Append hints to result
+    if (hints.length > 0) {
+      result.hints = hints;
+    }
+
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return resultJson;
+  }
+}
+
+/**
+ * Add contextual hints to hivemind_store responses
+ */
+function addHivemindStoreHints(resultJson: string, params: Record<string, unknown>): string {
+  try {
+    const result = JSON.parse(resultJson);
+    if (!result.success) return resultJson;
+
+    const information = params.information as string;
+    const tags = params.tags as string;
+    const hints: string[] = [];
+
+    // Success hints
+    hints.push(`Stored! Memory is now searchable via hivemind_find`);
+
+    // Tag suggestions
+    if (!tags || tags.trim() === "") {
+      hints.push(`Tip: Add tags to improve discoverability: hivemind_store({information: '...', tags: 'topic,context'})`);
+    }
+
+    // Related memory check
+    const shortened = information.slice(0, 100);
+    hints.push(`Related memories may exist. Consider: hivemind_find({query: '${shortened.slice(0, 50)}'})`);
+
+    // Feature hints
+    if (!params.extractEntities) {
+      hints.push(`Tip: Use extractEntities: true to auto-extract entities from content`);
+    }
+
+    if (!params.autoLink) {
+      hints.push(`Tip: Use autoLink: true to automatically link to related memories`);
+    }
+
+    // Append hints to result
+    if (hints.length > 0) {
+      result.hints = hints;
+    }
+
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return resultJson;
+  }
 }
 
 // ============================================================================
@@ -603,6 +734,8 @@ const swarmPlugin = {
       dedupScore: { type: "number", default: 0.85, description: "Min similarity to consider duplicate (prevents storing)" },
       memoryScope: { type: "string", default: "global", description: "Memory scope: 'global' (system-wide) or 'project' (per-directory)" },
       globalMemoryPath: { type: "string", description: "Path for global memory (default: ~/clawd)" },
+      decayTierFilter: { type: "string", default: "hot", description: "Filter memories by decay tier: hot, warm, cold, stale, or 'all'" },
+      extractEntitiesOnCapture: { type: "boolean", default: true, description: "Extract entities from captured memories" },
       debug: { type: "boolean", default: false, description: "Debug logging" },
     },
     additionalProperties: false,
@@ -617,6 +750,8 @@ const swarmPlugin = {
       dedupScore: 0.85,
       memoryScope: "global",
       globalMemoryPath: `${process.env.HOME}/clawd`,
+      decayTierFilter: "hot",
+      extractEntitiesOnCapture: true,
       debug: false,
       ...(api.pluginConfig as Record<string, unknown>),
     };
@@ -636,6 +771,18 @@ const swarmPlugin = {
         parameters: tool.parameters,
         execute: async (_toolCallId: string, params: Record<string, unknown>) => {
           const result = executeSwarmTool(tool.name, params);
+
+          // Add HATEOAS-style hints for hivemind tools
+          if (tool.name === "hivemind_find") {
+            return {
+              content: [{ type: "text", text: addHivemindFindHints(result, params) }],
+            };
+          } else if (tool.name === "hivemind_store") {
+            return {
+              content: [{ type: "text", text: addHivemindStoreHints(result, params) }],
+            };
+          }
+
           return {
             content: [{ type: "text", text: result }],
           };
@@ -660,7 +807,11 @@ const swarmPlugin = {
 
         try {
           console.log(`[swarm-plugin] Querying hivemind for: ${prompt.slice(0, 50)}...`);
-          const result = swarmMemory("find", { query: prompt, limit: cfg.maxRecallResults });
+          const findParams: Record<string, unknown> = { query: prompt, limit: cfg.maxRecallResults };
+          if (cfg.decayTierFilter && cfg.decayTierFilter !== "all") {
+            findParams.decayTier = cfg.decayTierFilter;
+          }
+          const result = swarmMemory("find", findParams);
           console.log(`[swarm-plugin] Hivemind result: success=${result.success}`);
           if (!result.success) return;
 
@@ -725,7 +876,14 @@ const swarmPlugin = {
             }
 
             const tags = detectTags(text);
-            const result = swarmMemory("store", { information: truncated, tags: tags.join(",") });
+            const storeParams: Record<string, unknown> = { information: truncated, tags: tags.join(",") };
+
+            // Enable entity extraction for entity-rich content
+            if (cfg.extractEntitiesOnCapture && isEntityRich(text)) {
+              storeParams.extractEntities = true;
+            }
+
+            const result = swarmMemory("store", storeParams);
             if (result.success) {
               stored++;
               markAsStored(truncated);
