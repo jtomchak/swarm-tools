@@ -8,8 +8,6 @@
  *   swarm setup    - Interactive installer for all dependencies
  *   swarm doctor   - Check dependency health with detailed status
  *   swarm init     - Initialize swarm in current project
- *   swarm claude   - Claude Code integration commands
- *   swarm mcp-serve - Debug-only MCP server (Claude auto-launches)
  *   swarm version  - Show version info
  *   swarm          - Interactive mode (same as setup)
  */
@@ -19,20 +17,17 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
-  readlinkSync,
   readdirSync,
   renameSync,
   rmdirSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join, resolve } from "path";
+import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import {
   checkBeadsMigrationNeeded,
@@ -55,21 +50,17 @@ import {
   resolvePartialId,
   createDurableStreamAdapter,
   createDurableStreamServer,
-  consolidateDatabases,
-  getGlobalDbPath,
 } from "swarm-mail";
-import { createMemoryAdapter } from "../src/memory";
 import { execSync, spawn } from "child_process";
 import { tmpdir } from "os";
 
 // Query & observability tools
 import {
-  executeQueryCLI,
+  executeQuery,
   executePreset,
   formatAsTable,
   formatAsCSV,
   formatAsJSON,
-  type QueryResult,
 } from "../src/query-tools.js";
 import {
   getWorkerStatus,
@@ -89,11 +80,6 @@ import {
   exportToCSV,
   exportToJSON,
 } from "../src/export-tools.js";
-import { tree } from "./commands/tree.js";
-import { session } from "./commands/session.js";
-import { log } from "./commands/log.js";
-import { status } from "./commands/status.js";
-import { queue } from "./commands/queue.js";
 import {
   querySwarmHistory,
   formatSwarmHistory,
@@ -106,9 +92,6 @@ import {
   formatHealthDashboard,
 } from "../src/observability-health.js";
 
-// Swarm insights
-import { getRejectionAnalytics, getCompactionAnalytics } from "../src/swarm-insights.js";
-
 // Eval tools
 import { getPhase, getScoreHistory, recordEvalRun, getEvalHistoryPath } from "../src/eval-history.js";
 import { DEFAULT_THRESHOLDS, checkGate } from "../src/eval-gates.js";
@@ -118,19 +101,11 @@ import { detectRegressions } from "../src/regression-detection.js";
 // All tools (for tool command)
 import { allTools } from "../src/index.js";
 
-// Skills (for skill-reload command)
-import { invalidateSkillsCache, discoverSkills } from "../src/skills.js";
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// When running from bin/swarm.ts, go up one level to find package.json
-// When bundled to dist/bin/swarm.js, go up two levels
-const pkgPath = existsSync(join(__dirname, "..", "package.json"))
-  ? join(__dirname, "..", "package.json")
-  : join(__dirname, "..", "..", "package.json");
+// When bundled to dist/bin/swarm.js, need to go up two levels to find package.json
+const pkgPath = join(__dirname, "..", "..", "package.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
 const VERSION: string = pkg.version;
-const PACKAGE_ROOT = dirname(pkgPath);
-const CLAUDE_PLUGIN_NAME = "swarm";
 
 // ============================================================================
 // ASCII Art & Branding
@@ -468,13 +443,24 @@ function showUpdateNotification(info: UpdateInfo) {
 // Types
 // ============================================================================
 
+type InstallType = "brew" | "npm" | "bun" | "pnpm" | "yarn" | "paru" | "choco" | "scoop" | "manual";
+
+interface InstallMethod {
+  name: string;
+  command: string;
+  type: InstallType;
+  platforms?: ("darwin" | "linux" | "win32")[];
+  requires?: string; // Command that must exist for this method to work
+}
+
 interface Dependency {
   name: string;
   command: string;
   checkArgs: string[];
   required: boolean;
   install: string;
-  installType: "brew" | "curl" | "go" | "npm" | "manual";
+  installType: InstallType;
+  installMethods?: InstallMethod[]; // Multiple installation options
   description: string;
 }
 
@@ -487,6 +473,77 @@ interface CheckResult {
 // ============================================================================
 // Dependencies
 // ============================================================================
+
+/**
+ * All available installation methods for OpenCode.
+ * Ordered by recommendation (curl first as it's most universal).
+ */
+const OPENCODE_INSTALL_METHODS: InstallMethod[] = [
+  // Universal (works on macOS and Linux)
+  {
+    name: "curl (recommended)",
+    command: "curl -fsSL https://opencode.ai/install | bash",
+    type: "manual",
+    platforms: ["darwin", "linux"],
+    requires: "curl",
+  },
+  // macOS and Linux package managers
+  {
+    name: "Homebrew",
+    command: "brew install opencode",
+    type: "brew",
+    platforms: ["darwin", "linux"],
+    requires: "brew",
+  },
+  // Node.js package managers (cross-platform)
+  {
+    name: "npm",
+    command: "npm install -g opencode-ai",
+    type: "npm",
+    requires: "npm",
+  },
+  {
+    name: "Bun",
+    command: "bun install -g opencode-ai",
+    type: "bun",
+    requires: "bun",
+  },
+  {
+    name: "pnpm",
+    command: "pnpm install -g opencode-ai",
+    type: "pnpm",
+    requires: "pnpm",
+  },
+  {
+    name: "Yarn",
+    command: "yarn global add opencode-ai",
+    type: "yarn",
+    requires: "yarn",
+  },
+  // Linux-specific
+  {
+    name: "paru (Arch Linux)",
+    command: "paru -S opencode-bin",
+    type: "paru",
+    platforms: ["linux"],
+    requires: "paru",
+  },
+  // Windows-specific
+  {
+    name: "Chocolatey",
+    command: "choco install opencode",
+    type: "choco",
+    platforms: ["win32"],
+    requires: "choco",
+  },
+  {
+    name: "Scoop",
+    command: "scoop bucket add extras && scoop install extras/opencode",
+    type: "scoop",
+    platforms: ["win32"],
+    requires: "scoop",
+  },
+];
 
 const DEPENDENCIES: Dependency[] = [
   {
@@ -503,18 +560,10 @@ const DEPENDENCIES: Dependency[] = [
     command: "opencode",
     checkArgs: ["--version"],
     required: true,
-    install: "brew install sst/tap/opencode",
-    installType: "brew",
-    description: "AI coding assistant (plugin host)",
-  },
-  {
-    name: "Claude Code",
-    command: "claude",
-    checkArgs: ["--version"],
-    required: false,
-    install: "https://docs.anthropic.com/claude-code",
+    install: "curl -fsSL https://opencode.ai/install | bash", // Default to curl
     installType: "manual",
-    description: "Claude Code CLI (optional host)",
+    installMethods: OPENCODE_INSTALL_METHODS,
+    description: "AI coding assistant (plugin host)",
   },
   // Note: Beads CLI (bd) is NO LONGER required - we use HiveAdapter from swarm-mail
   // which provides the same functionality programmatically without external dependencies
@@ -526,6 +575,15 @@ const DEPENDENCIES: Dependency[] = [
     install: "https://github.com/Dicklesworthstone/coding_agent_session_search",
     installType: "manual",
     description: "Indexes and searches AI coding agent history for context",
+  },
+  {
+    name: "UBS (Ultimate Bug Scanner)",
+    command: "ubs",
+    checkArgs: ["--help"],
+    required: false,
+    install: "https://github.com/Dicklesworthstone/ultimate_bug_scanner",
+    installType: "manual",
+    description: "AI-powered static analysis for pre-completion bug scanning",
   },
   {
     name: "Ollama",
@@ -550,7 +608,6 @@ async function checkCommand(
     try {
       const proc = spawn(cmd, args, {
         stdio: ["ignore", "pipe", "pipe"],
-        shell: true,  // Required on Windows to find .cmd/.ps1 wrappers
       });
       
       let stdout = "";
@@ -579,11 +636,8 @@ async function checkCommand(
 async function runInstall(command: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      // On Windows, use cmd.exe /c; on Unix, use sh -c
-      // shell: true handles this automatically
-      const proc = spawn(command, {
+      const proc = spawn("bash", ["-c", command], {
         stdio: "inherit",
-        shell: true,
       });
       
       proc.on("error", () => {
@@ -611,154 +665,79 @@ async function checkAllDependencies(): Promise<CheckResult[]> {
   return results;
 }
 
-// ============================================================================
-// Claude Code Helpers
-// ============================================================================
-
-interface ClaudeHookInput {
-  project?: { path?: string };
-  cwd?: string;
-  session?: { id?: string };
-  metadata?: { cwd?: string };
-  prompt?: string; // UserPromptSubmit includes the user's prompt text
-}
-
 /**
- * Resolve the Claude Code plugin root bundled with the package.
+ * Get available installation methods for a dependency based on:
+ * - Current platform (darwin, linux, win32)
+ * - Available package managers on the system
  */
-function getClaudePluginRoot(): string {
-  return join(PACKAGE_ROOT, "claude-plugin");
-}
+async function getAvailableInstallMethods(
+  methods: InstallMethod[],
+): Promise<InstallMethod[]> {
+  const platform = process.platform as "darwin" | "linux" | "win32";
+  const available: InstallMethod[] = [];
 
-/**
- * Resolve the Claude Code config directory.
- */
-function getClaudeConfigDir(): string {
-  return join(homedir(), ".claude");
-}
+  for (const method of methods) {
+    // Check platform compatibility
+    if (method.platforms && !method.platforms.includes(platform)) {
+      continue;
+    }
 
-/**
- * Read JSON input from stdin for Claude Code hooks.
- */
-async function readHookInput<T>(): Promise<T | null> {
-  if (process.stdin.isTTY) return null;
-  const chunks: string[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk.toString());
+    // Check if required command is available
+    if (method.requires) {
+      const { available: cmdAvailable } = await checkCommand(method.requires, ["--version"]);
+      // Some commands don't support --version, try --help as fallback
+      if (!cmdAvailable) {
+        const { available: helpAvailable } = await checkCommand(method.requires, ["--help"]);
+        if (!helpAvailable) {
+          // Special case: curl doesn't have --version on some systems, check with -V
+          if (method.requires === "curl") {
+            const { available: curlAvailable } = await checkCommand("curl", ["-V"]);
+            if (!curlAvailable) continue;
+          } else {
+            continue;
+          }
+        }
+      }
+    }
+
+    available.push(method);
   }
-  const raw = chunks.join("").trim();
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
+
+  return available;
+}
+
+/**
+ * Prompt user to select an installation method for a dependency
+ */
+async function promptInstallMethod(
+  dep: Dependency,
+  availableMethods: InstallMethod[],
+): Promise<InstallMethod | null> {
+  if (availableMethods.length === 0) {
+    p.log.error(`No installation methods available for ${dep.name} on this system`);
+    p.log.message(dim("  You may need to install it manually"));
     return null;
   }
-}
 
-/**
- * Resolve the project path for Claude Code hook executions.
- */
-function resolveClaudeProjectPath(input: ClaudeHookInput | null): string {
-  return (
-    input?.project?.path ||
-    input?.cwd ||
-    input?.metadata?.cwd ||
-    process.env.CLAUDE_PROJECT_DIR ||
-    process.env.PWD ||
-    process.cwd()
-  );
-}
-
-/**
- * Format hook output for Claude Code context injection.
- * Uses the proper JSON format with hookSpecificOutput for structured feedback.
- */
-function writeClaudeHookOutput(
-  hookEventName: string,
-  additionalContext: string,
-  options?: { suppressOutput?: boolean }
-): void {
-  if (!additionalContext.trim()) return;
-  process.stdout.write(
-    `${JSON.stringify({
-      suppressOutput: options?.suppressOutput,
-      hookSpecificOutput: {
-        hookEventName,
-        additionalContext,
-      },
-    })}\n`,
-  );
-}
-
-/**
- * @deprecated Use writeClaudeHookOutput for proper hook-specific JSON format
- */
-function writeClaudeHookContext(additionalContext: string): void {
-  if (!additionalContext.trim()) return;
-  process.stdout.write(
-    `${JSON.stringify({
-      additionalContext,
-    })}\n`,
-  );
-}
-
-interface ClaudeInstallStatus {
-  pluginRoot: string;
-  globalPluginPath: string;
-  globalPluginTarget?: string;
-  globalPluginExists: boolean;
-  globalPluginLinked: boolean;
-  projectClaudeDir: string;
-  projectConfigExists: boolean;
-  projectConfigPaths: string[];
-}
-
-/**
- * Inspect Claude Code install state for global and project scopes.
- */
-function getClaudeInstallStatus(projectPath: string): ClaudeInstallStatus {
-  const pluginRoot = getClaudePluginRoot();
-  const claudeConfigDir = getClaudeConfigDir();
-  const globalPluginPath = join(claudeConfigDir, "plugins", CLAUDE_PLUGIN_NAME);
-
-  let globalPluginExists = false;
-  let globalPluginLinked = false;
-  let globalPluginTarget: string | undefined;
-
-  if (existsSync(globalPluginPath)) {
-    globalPluginExists = true;
-    try {
-      const stat = lstatSync(globalPluginPath);
-      if (stat.isSymbolicLink()) {
-        globalPluginLinked = true;
-        const target = readlinkSync(globalPluginPath);
-        globalPluginTarget = resolve(dirname(globalPluginPath), target);
-      }
-    } catch {
-      // Ignore errors
-    }
+  if (availableMethods.length === 1) {
+    // Only one option, use it directly
+    return availableMethods[0];
   }
 
-  const projectClaudeDir = join(projectPath, ".claude");
-  const projectConfigPaths = [
-    join(projectClaudeDir, "commands"),
-    join(projectClaudeDir, "agents"),
-    join(projectClaudeDir, "skills"),
-    join(projectClaudeDir, "hooks"),
-    join(projectClaudeDir, ".mcp.json"),
-  ];
-  const projectConfigExists = projectConfigPaths.some((path) => existsSync(path));
+  const selected = await p.select({
+    message: `How would you like to install ${dep.name}?`,
+    options: availableMethods.map((method) => ({
+      value: method,
+      label: method.name,
+      hint: method.command,
+    })),
+  });
 
-  return {
-    pluginRoot,
-    globalPluginPath,
-    globalPluginTarget,
-    globalPluginExists,
-    globalPluginLinked,
-    projectClaudeDir,
-    projectConfigExists,
-    projectConfigPaths,
-  };
+  if (p.isCancel(selected)) {
+    return null;
+  }
+
+  return selected;
 }
 
 // ============================================================================
@@ -1577,7 +1556,7 @@ skills_list()
 # Check what MCP servers are available (look for context7, pdf-brain, fetch, etc.)
 # Note: No direct MCP listing tool - infer from task context or ask coordinator
 
-# Check for CLI tools if relevant (bd, cass, ollama)
+# Check for CLI tools if relevant (bd, cass, ubs, ollama)
 # Use Bash tool to check: which <tool-name>
 \`\`\`
 
@@ -1706,6 +1685,7 @@ bash("which <tool>", description="Check if <tool> is available")
 
 # Examples:
 bash("which cass", description="Check CASS availability")
+bash("which ubs", description="Check UBS availability")
 bash("ollama --version", description="Check Ollama availability")
 \`\`\`
 
@@ -1765,20 +1745,28 @@ Begin by executing Step 1 (swarmmail_init).
 
 /**
  * Get the fix command for a dependency
- * Returns null for manual installs (those show a link instead)
+ * Returns platform-appropriate install suggestions
  */
 function getFixCommand(dep: Dependency): string | null {
+  const platform = process.platform;
+  
   switch (dep.name) {
     case "OpenCode":
-      return "brew install sst/tap/opencode";
-    case "Claude Code":
-      return "See: https://docs.anthropic.com/claude-code";
+      // Show platform-appropriate suggestions
+      if (platform === "win32") {
+        return "choco install opencode  OR  scoop bucket add extras && scoop install extras/opencode  OR  npm install -g opencode-ai";
+      } else {
+        return "curl -fsSL https://opencode.ai/install | bash  OR  brew install opencode  OR  npm install -g opencode-ai";
+      }
     case "Ollama":
+      if (platform === "win32") {
+        return "See: https://ollama.ai/download (then: ollama pull mxbai-embed-large)";
+      }
       return "brew install ollama && ollama pull mxbai-embed-large";
-    case "Redis":
-      return "brew install redis && brew services start redis";
     case "CASS (Coding Agent Session Search)":
       return "See: https://github.com/Dicklesworthstone/coding_agent_session_search";
+    case "UBS (Ultimate Bug Scanner)":
+      return "See: https://github.com/Dicklesworthstone/ultimate_bug_scanner";
     default:
       // Fallback to generic install command if available
       return dep.installType !== "manual" ? dep.install : null;
@@ -1850,7 +1838,7 @@ async function doctor(debug = false) {
   // Check skills
   p.log.step("Skills:");
   const configDir = join(homedir(), ".config", "opencode");
-  const globalSkillsPath = join(configDir, "skill");
+  const globalSkillsPath = join(configDir, "skills");
   const bundledSkillsPath = join(__dirname, "..", "global-skills");
 
   // Global skills directory
@@ -1905,42 +1893,6 @@ async function doctor(debug = false) {
       } catch {
         // Ignore
       }
-    }
-  }
-
-  // Claude Code checks
-  p.log.step("Claude Code:");
-  const claudeResult = results.find((result) => result.dep.name === "Claude Code");
-  const claudeStatus = getClaudeInstallStatus(process.cwd());
-
-  if (!claudeResult?.available) {
-    p.log.warn("Claude Code CLI not detected (optional)");
-    p.log.message(dim("  Install: https://docs.anthropic.com/claude-code"));
-  } else {
-    p.log.success(`Claude Code CLI detected${claudeResult.version ? ` v${claudeResult.version}` : ""}`);
-
-    if (existsSync(claudeStatus.pluginRoot)) {
-      p.log.message(dim(`  Plugin bundle: ${claudeStatus.pluginRoot}`));
-    } else {
-      p.log.warn(`Claude plugin bundle missing: ${claudeStatus.pluginRoot}`);
-    }
-
-    if (claudeStatus.globalPluginExists) {
-      if (claudeStatus.globalPluginLinked) {
-        p.log.success(`Global plugin symlink: ${claudeStatus.globalPluginPath}`);
-      } else {
-        p.log.warn(`Global plugin exists but is not a symlink: ${claudeStatus.globalPluginPath}`);
-      }
-    } else {
-      p.log.warn("Global Claude plugin not installed");
-      p.log.message(dim("  Run: swarm claude install"));
-    }
-
-    if (claudeStatus.projectConfigExists) {
-      p.log.success(`Project Claude config: ${claudeStatus.projectClaudeDir}`);
-    } else {
-      p.log.warn("Project Claude config not found");
-      p.log.message(dim("  Run: swarm claude init"));
     }
   }
 
@@ -2180,8 +2132,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
     p.log.step("Missing " + requiredMissing.length + " required dependencies");
 
     for (const { dep } of requiredMissing) {
-      // In non-interactive mode, auto-install required deps
-      const shouldInstall = nonInteractive ? true : await p.confirm({
+      const shouldInstall = await p.confirm({
         message: "Install " + dep.name + "? (" + dep.description + ")",
         initialValue: true,
       });
@@ -2192,16 +2143,47 @@ async function setup(forceReinstall = false, nonInteractive = false) {
       }
 
       if (shouldInstall) {
-        const installSpinner = p.spinner();
-        installSpinner.start("Installing " + dep.name + "...");
+        // Check if this dependency has multiple installation methods
+        if (dep.installMethods && dep.installMethods.length > 0) {
+          // Detect available methods on this system
+          const detectSpinner = p.spinner();
+          detectSpinner.start("Detecting available installation methods...");
+          const availableMethods = await getAvailableInstallMethods(dep.installMethods);
+          detectSpinner.stop(`Found ${availableMethods.length} installation method(s)`);
 
-        const success = await runInstall(dep.install);
+          // Prompt user to select method
+          const selectedMethod = await promptInstallMethod(dep, availableMethods);
+          
+          if (!selectedMethod) {
+            p.log.warn("Skipping " + dep.name + " - no installation method selected");
+            continue;
+          }
 
-        if (success) {
-          installSpinner.stop(dep.name + " installed");
+          const installSpinner = p.spinner();
+          installSpinner.start(`Installing ${dep.name} via ${selectedMethod.name}...`);
+
+          const success = await runInstall(selectedMethod.command);
+
+          if (success) {
+            installSpinner.stop(dep.name + " installed");
+          } else {
+            installSpinner.stop("Failed to install " + dep.name);
+            p.log.error("Command failed: " + selectedMethod.command);
+            p.log.message(dim("  Try running the command manually in your terminal"));
+          }
         } else {
-          installSpinner.stop("Failed to install " + dep.name);
-          p.log.error("Manual install: " + dep.install);
+          // Fallback to single install command
+          const installSpinner = p.spinner();
+          installSpinner.start("Installing " + dep.name + "...");
+
+          const success = await runInstall(dep.install);
+
+          if (success) {
+            installSpinner.stop(dep.name + " installed");
+          } else {
+            installSpinner.stop("Failed to install " + dep.name);
+            p.log.error("Manual install: " + dep.install);
+          }
         }
       } else {
         p.log.warn("Skipping " + dep.name + " - swarm may not work correctly");
@@ -2375,85 +2357,6 @@ async function setup(forceReinstall = false, nonInteractive = false) {
     }
   } else {
     p.log.message(dim('  No OpenCode config found (skipping MCP check)'));
-  }
-
-  // Check for stray databases and consolidate to global database
-  p.log.step("Checking for stray databases...");
-  const globalDbPath = getGlobalDbPath();
-  
-  try {
-    const report = await consolidateDatabases(cwd, globalDbPath, {
-      yes: nonInteractive,
-      interactive: !nonInteractive,
-    });
-
-    if (report.straysFound > 0) {
-      if (report.totalRowsMigrated > 0) {
-        p.log.success(
-          `Migrated ${report.totalRowsMigrated} records from ${report.straysMigrated} stray database(s)`
-        );
-        for (const migration of report.migrations) {
-          const { migrated, skipped } = migration.result;
-          if (migrated > 0 || skipped > 0) {
-            p.log.message(
-              dim(
-                `  ${migration.path}: ${migrated} migrated, ${skipped} skipped`
-              )
-            );
-          }
-        }
-      } else {
-        p.log.message(
-          dim("  All data already in global database (no migration needed)")
-        );
-      }
-    } else {
-      p.log.message(dim("  No stray databases found"));
-    }
-
-    if (report.errors.length > 0) {
-      p.log.warn(`${report.errors.length} error(s) during consolidation`);
-      for (const error of report.errors) {
-        p.log.message(dim(`  ${error}`));
-      }
-    }
-  } catch (error) {
-    p.log.warn("Database consolidation check failed");
-    if (error instanceof Error) {
-      p.log.message(dim(`  ${error.message}`));
-    }
-    // Don't fail setup - this is non-critical
-  }
-
-  // Run database repair after consolidation
-  p.log.step("Running database integrity check...");
-  try {
-    const repairResult = await runDbRepair({ dryRun: false });
-    
-    if (repairResult.totalCleaned === 0) {
-      p.log.success("Database integrity verified - no issues found");
-    } else {
-      p.log.success(`Cleaned ${repairResult.totalCleaned} orphaned/invalid records`);
-      
-      if (repairResult.nullBeads > 0) {
-        p.log.message(dim(`  - ${repairResult.nullBeads} beads with NULL IDs`));
-      }
-      if (repairResult.orphanedRecipients > 0) {
-        p.log.message(dim(`  - ${repairResult.orphanedRecipients} orphaned message recipients`));
-      }
-      if (repairResult.messagesWithoutRecipients > 0) {
-        p.log.message(dim(`  - ${repairResult.messagesWithoutRecipients} messages without recipients`));
-      }
-      if (repairResult.expiredReservations > 0) {
-        p.log.message(dim(`  - ${repairResult.expiredReservations} expired reservations`));
-      }
-    }
-  } catch (error) {
-    p.log.warn("Database repair check failed (non-critical)");
-    if (error instanceof Error) {
-      p.log.message(dim(`  ${error.message}`));
-    }
-    // Don't fail setup - this is non-critical
   }
 
   // Model defaults: opus for coordinator, sonnet for worker, haiku for lite
@@ -2670,7 +2573,7 @@ async function setup(forceReinstall = false, nonInteractive = false) {
   p.log.message(dim(`  Skills directory: ${skillsDir}`));
 
   // Show bundled skills info (and optionally sync to global skills dir)
-  const bundledSkillsPath = join(PACKAGE_ROOT, "global-skills");
+  const bundledSkillsPath = join(__dirname, "..", "global-skills");
   const bundledSkills = listDirectoryNames(bundledSkillsPath);
   if (existsSync(bundledSkillsPath)) {
     if (bundledSkills.length > 0) {
@@ -2760,36 +2663,6 @@ async function setup(forceReinstall = false, nonInteractive = false) {
     }
   }
 
-  // Claude Code checks
-  p.log.step("Claude Code integration (optional)...");
-  const claudeResult = results.find((result) => result.dep.name === "Claude Code");
-  const claudeStatus = getClaudeInstallStatus(cwd);
-
-  if (!claudeResult?.available) {
-    p.log.warn("Claude Code not detected (optional)");
-    p.log.message(dim("  Install: https://docs.anthropic.com/claude-code"));
-  } else {
-    const versionInfo = claudeResult.version ? ` v${claudeResult.version}` : "";
-    p.log.success(`Claude Code detected${versionInfo}`);
-    p.log.message(dim(`  Plugin bundle: ${claudeStatus.pluginRoot}`));
-
-    if (claudeStatus.globalPluginExists) {
-      if (claudeStatus.globalPluginLinked) {
-        p.log.success(`Claude plugin linked: ${claudeStatus.globalPluginPath}`);
-      } else {
-        p.log.warn(`Claude plugin exists but is not a symlink: ${claudeStatus.globalPluginPath}`);
-      }
-    } else {
-      p.log.message(dim("  Run 'swarm claude install' for a dev symlink"));
-    }
-
-    if (claudeStatus.projectConfigExists) {
-      p.log.success(`Project Claude config: ${claudeStatus.projectClaudeDir}`);
-    } else {
-      p.log.message(dim("  Run 'swarm claude init' to create .claude/ config"));
-    }
-  }
-
   // Show setup summary
   const totalFiles = stats.created + stats.updated + stats.unchanged;
   const summaryParts: string[] = [];
@@ -2806,896 +2679,6 @@ async function setup(forceReinstall = false, nonInteractive = false) {
   );
 
   p.outro("Run 'swarm doctor' to verify installation.");
-}
-
-// ============================================================================
-// Claude Code Commands
-// ============================================================================
-
-/**
- * Handle Claude Code subcommands.
- */
-async function claudeCommand() {
-  const args = process.argv.slice(3);
-  const subcommand = args[0];
-
-  if (!subcommand || ["help", "--help", "-h"].includes(subcommand)) {
-    showClaudeHelp();
-    return;
-  }
-
-  switch (subcommand) {
-    case "path":
-      claudePath();
-      break;
-    case "install":
-      await claudeInstall();
-      break;
-    case "uninstall":
-      await claudeUninstall();
-      break;
-    case "init":
-      await claudeInit();
-      break;
-    case "session-start":
-      await claudeSessionStart();
-      break;
-    case "user-prompt":
-      await claudeUserPrompt();
-      break;
-    case "pre-edit":
-      await claudePreEdit();
-      break;
-    case "pre-complete":
-      await claudePreComplete();
-      break;
-    case "post-complete":
-      await claudePostComplete();
-      break;
-    case "pre-compact":
-      await claudePreCompact();
-      break;
-    case "session-end":
-      await claudeSessionEnd();
-      break;
-    case "track-tool":
-      await claudeTrackTool(Bun.argv[4]); // tool name is 4th arg
-      break;
-    case "compliance":
-      await claudeCompliance();
-      break;
-    case "skill-reload":
-      await claudeSkillReload();
-      break;
-    default:
-      console.error(`Unknown subcommand: ${subcommand}`);
-      showClaudeHelp();
-      process.exit(1);
-  }
-}
-
-function showClaudeHelp() {
-  console.log(`
-Usage: swarm claude <command>
-
-Commands:
-  path                Print Claude plugin path (for --plugin-dir)
-  install             Symlink plugin into ~/.claude/plugins/${CLAUDE_PLUGIN_NAME}
-  uninstall           Remove Claude plugin symlink
-  init                Create project-local .claude/ config
-  session-start       Hook: session start context (JSON output)
-  user-prompt         Hook: prompt submit context (JSON output)
-  pre-edit            Hook: pre-Edit/Write reminder (hivemind check)
-  pre-complete        Hook: pre-swarm_complete checklist
-  post-complete       Hook: post-swarm_complete learnings reminder
-  pre-compact         Hook: pre-compaction handler
-  session-end         Hook: session cleanup
-  skill-reload        Hook: hot-reload skills after modification
-`);
-}
-
-/**
- * Print the bundled Claude plugin path.
- */
-function claudePath() {
-  const pluginRoot = getClaudePluginRoot();
-  if (!existsSync(pluginRoot)) {
-    console.error(`Claude plugin not found at ${pluginRoot}`);
-    process.exit(1);
-  }
-  console.log(pluginRoot);
-}
-
-/**
- * Install the Claude plugin symlink for local development.
- */
-async function claudeInstall() {
-  p.intro("swarm claude install");
-  const pluginRoot = getClaudePluginRoot();
-  if (!existsSync(pluginRoot)) {
-    p.log.error(`Claude plugin not found at ${pluginRoot}`);
-    p.outro("Aborted");
-    process.exit(1);
-  }
-
-  const claudeConfigDir = getClaudeConfigDir();
-  const pluginsDir = join(claudeConfigDir, "plugins");
-  const pluginPath = join(pluginsDir, CLAUDE_PLUGIN_NAME);
-
-  mkdirWithStatus(pluginsDir);
-
-  if (existsSync(pluginPath)) {
-    const stat = lstatSync(pluginPath);
-    if (!stat.isSymbolicLink()) {
-      p.log.error(`Existing path is not a symlink: ${pluginPath}`);
-      p.outro("Aborted");
-      process.exit(1);
-    }
-
-    const target = readlinkSync(pluginPath);
-    const resolved = resolve(dirname(pluginPath), target);
-    if (resolved === pluginRoot) {
-      p.log.success("Claude plugin already linked");
-      p.outro("Done");
-      return;
-    }
-
-    rmSync(pluginPath, { force: true });
-  }
-
-  symlinkSync(pluginRoot, pluginPath);
-  p.log.success(`Linked ${CLAUDE_PLUGIN_NAME} → ${pluginRoot}`);
-  p.log.message(dim("  Claude Code will auto-launch MCP from .mcp.json"));
-  p.outro("Claude plugin installed");
-}
-
-/**
- * Remove the Claude plugin symlink.
- */
-async function claudeUninstall() {
-  p.intro("swarm claude uninstall");
-  const pluginPath = join(getClaudeConfigDir(), "plugins", CLAUDE_PLUGIN_NAME);
-
-  if (!existsSync(pluginPath)) {
-    p.log.warn("Claude plugin symlink not found");
-    p.outro("Nothing to remove");
-    return;
-  }
-
-  rmSync(pluginPath, { recursive: true, force: true });
-  p.log.success(`Removed ${pluginPath}`);
-  p.outro("Claude plugin uninstalled");
-}
-
-/**
- * Create project-local Claude Code config from bundled plugin assets.
- */
-async function claudeInit() {
-  p.intro("swarm claude init");
-  const projectPath = process.cwd();
-  const pluginRoot = getClaudePluginRoot();
-
-  if (!existsSync(pluginRoot)) {
-    p.log.error(`Claude plugin not found at ${pluginRoot}`);
-    p.outro("Aborted");
-    process.exit(1);
-  }
-
-  const projectClaudeDir = join(projectPath, ".claude");
-  const commandDir = join(projectClaudeDir, "commands");
-  const agentDir = join(projectClaudeDir, "agents");
-  const skillsDir = join(projectClaudeDir, "skills");
-  const hooksDir = join(projectClaudeDir, "hooks");
-
-  for (const dir of [projectClaudeDir, commandDir, agentDir, skillsDir, hooksDir]) {
-    mkdirWithStatus(dir);
-  }
-
-  const copyMap = [
-    { src: join(pluginRoot, "commands"), dest: commandDir, label: "Commands" },
-    { src: join(pluginRoot, "agents"), dest: agentDir, label: "Agents" },
-    { src: join(pluginRoot, "skills"), dest: skillsDir, label: "Skills" },
-    { src: join(pluginRoot, "hooks"), dest: hooksDir, label: "Hooks" },
-  ];
-
-  for (const { src, dest, label } of copyMap) {
-    if (existsSync(src)) {
-      copyDirRecursiveSync(src, dest);
-      p.log.success(`${label}: ${dest}`);
-    }
-  }
-
-  const mcpSourcePath = join(pluginRoot, ".mcp.json");
-  if (existsSync(mcpSourcePath)) {
-    const mcpDestPath = join(projectClaudeDir, ".mcp.json");
-    const content = readFileSync(mcpSourcePath, "utf-8");
-    writeFileWithStatus(mcpDestPath, content, "MCP config");
-  }
-
-  const lspSourcePath = join(pluginRoot, ".lsp.json");
-  if (existsSync(lspSourcePath)) {
-    const lspDestPath = join(projectClaudeDir, ".lsp.json");
-    const content = readFileSync(lspSourcePath, "utf-8");
-    writeFileWithStatus(lspDestPath, content, "LSP config");
-  }
-
-  p.log.message(dim("  Uses ${CLAUDE_PLUGIN_ROOT} in MCP config"));
-  p.outro("Claude project config ready");
-}
-
-/**
- * Claude hook: start a session and emit comprehensive context for Claude Code.
- *
- * Gathers:
- * - Session info + previous handoff notes
- * - In-progress cells (work that was mid-flight)
- * - Open epics with their children
- * - Recent activity summary
- */
-async function claudeSessionStart() {
-  try {
-    const input = await readHookInput<ClaudeHookInput>();
-    const projectPath = resolveClaudeProjectPath(input);
-    const swarmMail = await getSwarmMailLibSQL(projectPath);
-    const db = await swarmMail.getDatabase(projectPath);
-    const adapter = createHiveAdapter(db, projectPath);
-
-    await adapter.runMigrations();
-
-    const session = await adapter.startSession(projectPath, {});
-    const contextLines: string[] = [];
-
-    // Session basics
-    contextLines.push(`## Swarm Session: ${session.id}`);
-    contextLines.push(`Source: ${(input as { source?: string }).source || "startup"}`);
-    contextLines.push("");
-
-    // Previous handoff notes (critical for continuation)
-    if (session.previous_handoff_notes) {
-      contextLines.push("## Previous Handoff Notes");
-      contextLines.push(session.previous_handoff_notes);
-      contextLines.push("");
-    }
-
-    // Active cell from previous session
-    if (session.active_cell_id) {
-      const activeCell = await adapter.getCell(projectPath, session.active_cell_id);
-      if (activeCell) {
-        contextLines.push("## Active Cell (from previous session)");
-        contextLines.push(`- **${activeCell.id}**: ${activeCell.title}`);
-        contextLines.push(`  Status: ${activeCell.status}, Priority: ${activeCell.priority}`);
-        if (activeCell.description) {
-          contextLines.push(`  ${activeCell.description.slice(0, 200)}...`);
-        }
-        contextLines.push("");
-      }
-    }
-
-    // In-progress cells (work that was mid-flight)
-    const inProgressCells = await adapter.getInProgressCells(projectPath);
-    if (inProgressCells.length > 0) {
-      contextLines.push("## In-Progress Work");
-      for (const cell of inProgressCells.slice(0, 5)) {
-        contextLines.push(`- **${cell.id}**: ${cell.title} (${cell.type}, P${cell.priority})`);
-        if (cell.description) {
-          contextLines.push(`  ${cell.description.slice(0, 150)}`);
-        }
-      }
-      if (inProgressCells.length > 5) {
-        contextLines.push(`  ... and ${inProgressCells.length - 5} more`);
-      }
-      contextLines.push("");
-    }
-
-    // Open epics (high-level context)
-    const openEpics = await adapter.queryCells(projectPath, {
-      status: "open",
-      type: "epic",
-      limit: 3
-    });
-    if (openEpics.length > 0) {
-      contextLines.push("## Open Epics");
-      for (const epic of openEpics) {
-        const children = await adapter.getEpicChildren(projectPath, epic.id);
-        const openChildren = children.filter(c => c.status !== "closed");
-        contextLines.push(`- **${epic.id}**: ${epic.title}`);
-        contextLines.push(`  ${openChildren.length}/${children.length} subtasks remaining`);
-      }
-      contextLines.push("");
-    }
-
-    // Stats summary
-    const stats = await adapter.getCellsStats(projectPath);
-    contextLines.push("## Hive Stats");
-    contextLines.push(`Open: ${stats.open} | In Progress: ${stats.in_progress} | Blocked: ${stats.blocked} | Closed: ${stats.closed}`);
-
-    writeClaudeHookOutput("SessionStart", contextLines.join("\n"));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: provide active context on prompt submission.
- *
- * Lightweight hook that runs on every prompt. Provides:
- * - Active session info
- * - Current in-progress cell (if any)
- * - Quick stats for awareness
- *
- * Output is suppressed from verbose mode to avoid noise.
- */
-async function claudeUserPrompt() {
-  try {
-    const input = await readHookInput<ClaudeHookInput>();
-    const projectPath = resolveClaudeProjectPath(input);
-    const swarmMail = await getSwarmMailLibSQL(projectPath);
-    const db = await swarmMail.getDatabase(projectPath);
-    const adapter = createHiveAdapter(db, projectPath);
-
-    await adapter.runMigrations();
-
-    const session = await adapter.getCurrentSession(projectPath);
-    if (!session) return;
-
-    const contextLines: string[] = [];
-
-    // Always inject current timestamp for temporal awareness
-    const now = new Date();
-    const timestamp = now.toLocaleString("en-US", {
-      weekday: "short",
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZoneName: "short",
-    });
-    contextLines.push(`**Now**: ${timestamp}`);
-
-    // Semantic memory recall - search hivemind for relevant context
-    if (input.prompt && input.prompt.trim().length > 10) {
-      try {
-        const memoryAdapter = await createMemoryAdapter(db);
-        const findResult = await memoryAdapter.find({ query: input.prompt, limit: 3 });
-        const memories = findResult.results;
-
-        if (memories && memories.length > 0) {
-          // Only include high-confidence matches (score > 0.5)
-          const relevant = memories.filter((m: { score?: number }) => (m.score ?? 0) > 0.5);
-          if (relevant.length > 0) {
-            const memorySnippets = relevant
-              .slice(0, 2) // Max 2 memories to keep context light
-              .map((m: { content?: string; information?: string }) => {
-                const content = m.content || m.information || "";
-                return content.length > 200 ? content.slice(0, 200) + "..." : content;
-              })
-              .join(" | ");
-            contextLines.push(`**Recall**: ${memorySnippets}`);
-          }
-        }
-      } catch {
-        // Memory recall is optional - don't fail the hook
-      }
-    }
-
-    // Current active cell (most relevant context)
-    if (session.active_cell_id) {
-      const activeCell = await adapter.getCell(projectPath, session.active_cell_id);
-      if (activeCell && activeCell.status !== "closed") {
-        contextLines.push(`**Active**: ${activeCell.id} - ${activeCell.title}`);
-      }
-    }
-
-    // Quick in-progress count for awareness
-    const inProgress = await adapter.getInProgressCells(projectPath);
-    if (inProgress.length > 0) {
-      const titles = inProgress.slice(0, 3).map(c => c.title.slice(0, 40)).join(", ");
-      contextLines.push(`**WIP (${inProgress.length})**: ${titles}${inProgress.length > 3 ? "..." : ""}`);
-    }
-
-    // Only output if there's meaningful context
-    if (contextLines.length > 0) {
-      writeClaudeHookOutput("UserPromptSubmit", contextLines.join(" | "), { suppressOutput: true });
-    }
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: capture comprehensive state before compaction.
- *
- * This is the CRITICAL hook for continuation. It captures:
- * - All in-progress work with details
- * - Active epic state and progress
- * - Any pending/blocked cells
- * - Reserved files
- * - Session context
- *
- * The output becomes part of the compacted summary, enabling
- * Claude to continue work seamlessly after context window fills.
- */
-async function claudePreCompact() {
-  try {
-    const input = await readHookInput<ClaudeHookInput & { trigger?: string; custom_instructions?: string }>();
-    const projectPath = resolveClaudeProjectPath(input);
-    const swarmMail = await getSwarmMailLibSQL(projectPath);
-    const db = await swarmMail.getDatabase(projectPath);
-    const adapter = createHiveAdapter(db, projectPath);
-
-    await adapter.runMigrations();
-
-    const session = await adapter.getCurrentSession(projectPath);
-    const contextLines: string[] = [];
-
-    contextLines.push("# Swarm State Snapshot (Pre-Compaction)");
-    contextLines.push(`Trigger: ${input.trigger || "auto"}`);
-    if (input.custom_instructions) {
-      contextLines.push(`Instructions: ${input.custom_instructions}`);
-    }
-    contextLines.push("");
-
-    // Session info
-    if (session) {
-      contextLines.push("## Session");
-      contextLines.push(`ID: ${session.id}`);
-      if (session.active_cell_id) {
-        contextLines.push(`Active cell: ${session.active_cell_id}`);
-      }
-    }
-    contextLines.push("");
-
-    // In-progress work (CRITICAL for continuation)
-    const inProgressCells = await adapter.getInProgressCells(projectPath);
-    if (inProgressCells.length > 0) {
-      contextLines.push("## In-Progress Work (CONTINUE THESE)");
-      for (const cell of inProgressCells) {
-        contextLines.push(`### ${cell.id}: ${cell.title}`);
-        contextLines.push(`Type: ${cell.type} | Priority: ${cell.priority} | Status: ${cell.status}`);
-        if (cell.parent_id) {
-          contextLines.push(`Parent: ${cell.parent_id}`);
-        }
-        if (cell.description) {
-          contextLines.push(`Description: ${cell.description}`);
-        }
-        // Get comments for context on progress
-        const comments = await adapter.getComments(projectPath, cell.id);
-        if (comments.length > 0) {
-          const recent = comments.slice(-3);
-          contextLines.push("Recent notes:");
-          for (const comment of recent) {
-            contextLines.push(`- ${comment.body.slice(0, 200)}`);
-          }
-        }
-        contextLines.push("");
-      }
-    }
-
-    // Open epics with children status
-    const openEpics = await adapter.queryCells(projectPath, {
-      status: ["open", "in_progress"],
-      type: "epic",
-      limit: 5
-    });
-    if (openEpics.length > 0) {
-      contextLines.push("## Active Epics");
-      for (const epic of openEpics) {
-        const children = await adapter.getEpicChildren(projectPath, epic.id);
-        const completed = children.filter(c => c.status === "closed").length;
-        const inProgress = children.filter(c => c.status === "in_progress");
-        const open = children.filter(c => c.status === "open");
-
-        contextLines.push(`### ${epic.id}: ${epic.title}`);
-        contextLines.push(`Progress: ${completed}/${children.length} completed`);
-
-        if (inProgress.length > 0) {
-          contextLines.push("In progress:");
-          for (const c of inProgress) {
-            contextLines.push(`- ${c.id}: ${c.title}`);
-          }
-        }
-        if (open.length > 0 && open.length <= 5) {
-          contextLines.push("Remaining:");
-          for (const c of open) {
-            contextLines.push(`- ${c.id}: ${c.title}`);
-          }
-        } else if (open.length > 5) {
-          contextLines.push(`Remaining: ${open.length} tasks`);
-        }
-        contextLines.push("");
-      }
-    }
-
-    // Blocked cells (so Claude knows what's waiting)
-    const blockedCells = await adapter.getBlockedCells(projectPath);
-    if (blockedCells.length > 0) {
-      contextLines.push("## Blocked Work");
-      for (const { cell, blockers } of blockedCells.slice(0, 5)) {
-        contextLines.push(`- ${cell.id}: ${cell.title}`);
-        contextLines.push(`  Blocked by: ${blockers.join(", ")}`);
-      }
-      contextLines.push("");
-    }
-
-    // Ready cells (next work available)
-    const readyCell = await adapter.getNextReadyCell(projectPath);
-    if (readyCell) {
-      contextLines.push("## Next Ready Task");
-      contextLines.push(`${readyCell.id}: ${readyCell.title} (P${readyCell.priority})`);
-      contextLines.push("");
-    }
-
-    // Stats
-    const stats = await adapter.getCellsStats(projectPath);
-    contextLines.push("## Hive Stats");
-    contextLines.push(`Open: ${stats.open} | In Progress: ${stats.in_progress} | Blocked: ${stats.blocked} | Closed: ${stats.closed}`);
-
-    writeClaudeHookOutput("PreCompact", contextLines.join("\n"));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: end the active session.
- */
-async function claudeSessionEnd() {
-  try {
-    const input = await readHookInput<ClaudeHookInput>();
-    const projectPath = resolveClaudeProjectPath(input);
-    const swarmMail = await getSwarmMailLibSQL(projectPath);
-    const db = await swarmMail.getDatabase(projectPath);
-    const adapter = createHiveAdapter(db, projectPath);
-
-    await adapter.runMigrations();
-
-    const currentSession = await adapter.getCurrentSession(projectPath);
-    if (!currentSession) return;
-
-    await adapter.endSession(projectPath, currentSession.id, {});
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: pre-edit reminder for workers
- *
- * Runs BEFORE Edit/Write tool calls. Reminds worker to query hivemind first.
- * This is a gentle nudge, not a blocker.
- */
-async function claudePreEdit() {
-  try {
-    const input = await readHookInput<ClaudeHookInput & { tool_name?: string; tool_input?: Record<string, unknown> }>();
-
-    // Only inject reminder if this looks like a worker context
-    // (workers have initialized via swarmmail_init)
-    const projectPath = resolveClaudeProjectPath(input);
-
-    // Check if we've seen hivemind_find in this session
-    // For now, we always remind - tracking will come later
-    const contextLines: string[] = [];
-
-    contextLines.push("⚠️ **Before this edit**: Did you run `hivemind_find` to check for existing solutions?");
-    contextLines.push("If you haven't queried hivemind yet, consider doing so to avoid re-solving problems.");
-
-    writeClaudeHookOutput("PreToolUse:Edit", contextLines.join("\n"), { suppressOutput: true });
-  } catch (error) {
-    // Non-fatal - don't block the edit
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: pre-complete check for workers
- *
- * Runs BEFORE swarm_complete. Checks compliance with mandatory steps
- * and warns if any were skipped.
- */
-async function claudePreComplete() {
-  try {
-    const input = await readHookInput<ClaudeHookInput & { tool_input?: Record<string, unknown> }>();
-    const projectPath = resolveClaudeProjectPath(input);
-    const contextLines: string[] = [];
-
-    // Check session tracking markers
-    const trackingDir = join(projectPath, ".claude", ".worker-tracking");
-    const sessionId = (input as { session_id?: string }).session_id || "";
-    const sessionDir = join(trackingDir, sessionId.slice(0, 8));
-
-    const mandatoryTools = [
-      { name: "swarmmail_init", label: "Initialize coordination" },
-      { name: "hivemind_find", label: "Query past learnings" },
-    ];
-    const recommendedTools = [
-      { name: "skills_use", label: "Load relevant skills" },
-      { name: "hivemind_store", label: "Store new learnings" },
-    ];
-
-    const missing: string[] = [];
-    const skippedRecommended: string[] = [];
-
-    for (const tool of mandatoryTools) {
-      const markerPath = join(sessionDir, `${tool.name}.marker`);
-      if (!existsSync(markerPath)) {
-        missing.push(tool.label);
-      }
-    }
-
-    for (const tool of recommendedTools) {
-      const markerPath = join(sessionDir, `${tool.name}.marker`);
-      if (!existsSync(markerPath)) {
-        skippedRecommended.push(tool.label);
-      }
-    }
-
-    if (missing.length > 0) {
-      contextLines.push("⚠️ **MANDATORY STEPS SKIPPED:**");
-      for (const step of missing) {
-        contextLines.push(`  ❌ ${step}`);
-      }
-      contextLines.push("");
-      contextLines.push("These steps are critical for swarm coordination.");
-      contextLines.push("Consider running `hivemind_find` before future completions.");
-    }
-
-    if (skippedRecommended.length > 0 && missing.length === 0) {
-      contextLines.push("📝 **Recommended steps not observed:**");
-      for (const step of skippedRecommended) {
-        contextLines.push(`  - ${step}`);
-      }
-    }
-
-    if (missing.length === 0 && skippedRecommended.length === 0) {
-      contextLines.push("✅ **All mandatory and recommended steps completed!**");
-    }
-
-    // Emit compliance event for analytics
-    try {
-      const swarmMail = await getSwarmMailLibSQL(projectPath);
-      const db = await swarmMail.getDatabase(projectPath);
-
-      await db.execute({
-        sql: `INSERT INTO swarm_events (event_type, project_path, agent_name, epic_id, bead_id, payload, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        args: [
-          "worker_compliance",
-          projectPath,
-          "worker",
-          "",
-          "",
-          JSON.stringify({
-            session_id: sessionId,
-            mandatory_skipped: missing.length,
-            recommended_skipped: skippedRecommended.length,
-            score: Math.round(((mandatoryTools.length - missing.length) / mandatoryTools.length) * 100),
-          }),
-        ],
-      });
-    } catch {
-      // Non-fatal
-    }
-
-    if (contextLines.length > 0) {
-      writeClaudeHookOutput("PreToolUse:swarm_complete", contextLines.join("\n"), { suppressOutput: missing.length === 0 });
-    }
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Claude hook: post-complete reminder for workers
- *
- * Runs AFTER swarm_complete. Reminds to store learnings if any were discovered.
- */
-async function claudePostComplete() {
-  try {
-    const input = await readHookInput<ClaudeHookInput & { tool_output?: string }>();
-    const contextLines: string[] = [];
-
-    contextLines.push("✅ Task completed. If you discovered anything valuable during this work:");
-    contextLines.push("```");
-    contextLines.push("hivemind_store(");
-    contextLines.push('  information="<what you learned, WHY it matters>",');
-    contextLines.push('  tags="<domain, pattern-type>"');
-    contextLines.push(")");
-    contextLines.push("```");
-    contextLines.push("**The swarm's collective intelligence grows when agents share learnings.**");
-
-    writeClaudeHookOutput("PostToolUse:swarm_complete", contextLines.join("\n"), { suppressOutput: true });
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Track when a mandatory tool is called.
- *
- * Creates a session-specific marker file that records tool usage.
- * These markers are checked at swarm_complete to calculate compliance.
- */
-async function claudeTrackTool(toolName: string) {
-  if (!toolName) return;
-
-  try {
-    const input = await readHookInput<ClaudeHookInput>();
-    const projectPath = resolveClaudeProjectPath(input);
-
-    // Get or create session tracking directory
-    const trackingDir = join(projectPath, ".claude", ".worker-tracking");
-    const sessionId = (input as { session_id?: string }).session_id || `unknown-${Date.now()}`;
-    const sessionDir = join(trackingDir, sessionId.slice(0, 8)); // Use first 8 chars of session ID
-
-    if (!existsSync(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
-    }
-
-    // Write marker file for this tool
-    const markerPath = join(sessionDir, `${toolName}.marker`);
-    writeFileSync(markerPath, new Date().toISOString());
-
-    // Also emit an event for long-term analytics (non-blocking)
-    try {
-      const swarmMail = await getSwarmMailLibSQL(projectPath);
-      const db = await swarmMail.getDatabase(projectPath);
-
-      await db.execute({
-        sql: `INSERT INTO swarm_events (event_type, project_path, agent_name, epic_id, bead_id, payload, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        args: [
-          "worker_tool_call",
-          projectPath,
-          "worker", // We don't have agent name in hook context
-          "",
-          "",
-          JSON.stringify({ tool: toolName, session_id: sessionId }),
-        ],
-      });
-    } catch {
-      // Non-fatal - tracking is best-effort
-    }
-  } catch (error) {
-    // Silent failure - don't interrupt the tool call
-    console.error(`[track-tool] ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Check worker compliance - which mandatory tools were called.
- *
- * Returns compliance data based on session tracking markers.
- */
-async function claudeCompliance() {
-  try {
-    const input = await readHookInput<ClaudeHookInput>();
-    const projectPath = resolveClaudeProjectPath(input);
-
-    const trackingDir = join(projectPath, ".claude", ".worker-tracking");
-    const sessionId = (input as { session_id?: string }).session_id || "";
-    const sessionDir = join(trackingDir, sessionId.slice(0, 8));
-
-    const mandatoryTools = ["swarmmail_init", "hivemind_find", "skills_use"];
-    const recommendedTools = ["hivemind_store"];
-
-    const compliance: Record<string, boolean> = {};
-
-    for (const tool of [...mandatoryTools, ...recommendedTools]) {
-      const markerPath = join(sessionDir, `${tool}.marker`);
-      compliance[tool] = existsSync(markerPath);
-    }
-
-    const mandatoryCount = mandatoryTools.filter(t => compliance[t]).length;
-    const score = Math.round((mandatoryCount / mandatoryTools.length) * 100);
-
-    console.log(JSON.stringify({
-      session_id: sessionId,
-      compliance,
-      mandatory_score: score,
-      mandatory_met: mandatoryCount,
-      mandatory_total: mandatoryTools.length,
-      stored_learnings: compliance.hivemind_store,
-    }));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-  }
-}
-
-/**
- * Hot-reload skills by clearing cache and re-scanning directories.
- * Triggered by Claude Code hook when skill files are modified.
- */
-async function claudeSkillReload() {
-  try {
-    // Clear the skills cache
-    invalidateSkillsCache();
-
-    // Re-scan skill directories to get updated list
-    const skills = await discoverSkills();
-
-    // Return success with count
-    console.log(JSON.stringify({
-      success: true,
-      reloaded: skills.size,
-      message: `Reloaded ${skills.size} skill(s)`,
-    }));
-  } catch (error) {
-    console.error(JSON.stringify({
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    }));
-  }
-}
-
-/**
- * Query worker compliance stats across all sessions.
- */
-async function showWorkerCompliance() {
-  const projectPath = process.cwd();
-
-  try {
-    // Use shared executeQuery (handles DB connection internally)
-    const toolUsageSql = `SELECT
-      json_extract(payload, '$.tool') as tool,
-      COUNT(*) as count,
-      COUNT(DISTINCT json_extract(payload, '$.session_id')) as sessions
-    FROM swarm_events
-    WHERE event_type = 'worker_tool_call'
-      AND created_at > datetime('now', '-7 days')
-    GROUP BY tool
-    ORDER BY count DESC`;
-
-    const toolResult = await executeQueryCLI(projectPath, toolUsageSql);
-    const rows = toolResult.rows;
-
-    console.log(yellow(BANNER));
-    console.log(cyan("\n📊 Worker Tool Usage (Last 7 Days)\n"));
-
-    if (rows.length === 0) {
-      console.log(dim("No worker tool usage data found."));
-      console.log(dim("Data is collected when workers run with the Claude Code plugin."));
-      return;
-    }
-
-    console.log(dim("Tool                    Calls   Sessions"));
-    console.log(dim("─".repeat(45)));
-
-    for (const row of rows) {
-      const tool = String(row.tool).padEnd(22);
-      const count = String(row.count).padStart(6);
-      const sessions = String(row.sessions).padStart(8);
-      console.log(`${tool} ${count} ${sessions}`);
-    }
-
-    // Calculate compliance rate
-    const hivemindFinds = rows.find(r => r.tool === "hivemind_find");
-    const completesSql = `SELECT COUNT(*) as count FROM swarm_events
-      WHERE event_type = 'worker_completed'
-        AND created_at > datetime('now', '-7 days')`;
-    const completesResult = await executeQueryCLI(projectPath, completesSql);
-
-    const completes = Number(completesResult.rows[0]?.count || 0);
-    const finds = Number(hivemindFinds?.count || 0);
-
-    if (completes > 0) {
-      const rate = Math.round((Math.min(finds, completes) / completes) * 100);
-      console.log(dim("\n─".repeat(45)));
-      console.log(`\n${green("Hivemind compliance rate:")} ${rate}% (${finds} queries / ${completes} completions)`);
-    }
-
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    if (msg.includes("no such table")) {
-      console.log(yellow(BANNER));
-      console.log(cyan("\n📊 Worker Tool Usage\n"));
-      console.log(dim("No tracking data yet."));
-      console.log(dim("Compliance tracking starts when workers run with the Claude Code plugin hooks."));
-      console.log(dim("\nThe swarm_events table will be created on first tracked tool call."));
-    } else {
-      console.error("Error fetching compliance data:", msg);
-    }
-  }
 }
 
 async function init() {
@@ -3866,7 +2849,7 @@ function config() {
   const plannerAgentPath = join(agentDir, "swarm-planner.md");
   const workerAgentPath = join(agentDir, "swarm-worker.md");
   const researcherAgentPath = join(agentDir, "swarm-researcher.md");
-  const globalSkillsPath = join(configDir, "skill");
+  const globalSkillsPath = join(configDir, "skills");
 
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
@@ -4045,16 +3028,16 @@ async function query() {
   const projectPath = process.cwd();
 
   try {
-    let result: QueryResult;
+    let rows: any[];
 
     if (parsed.preset) {
       // Execute preset query
       p.log.step(`Executing preset: ${parsed.preset}`);
-      result = await executePreset(projectPath, parsed.preset);
+      rows = await executePreset(projectPath, parsed.preset);
     } else if (parsed.query) {
       // Execute custom SQL
       p.log.step("Executing custom SQL");
-      result = await executeQueryCLI(projectPath, parsed.query);
+      rows = await executeQuery(projectPath, parsed.query);
     } else {
       p.log.error("No query specified. Use --sql or --preset");
       p.outro("Aborted");
@@ -4065,14 +3048,14 @@ async function query() {
     let output: string;
     switch (parsed.format) {
       case "csv":
-        output = formatAsCSV(result);
+        output = formatAsCSV(rows);
         break;
       case "json":
-        output = formatAsJSON(result);
+        output = formatAsJSON(rows);
         break;
       case "table":
       default:
-        output = formatAsTable(result);
+        output = formatAsTable(rows);
         break;
     }
 
@@ -4080,7 +3063,7 @@ async function query() {
     console.log(output);
     console.log();
 
-    p.outro(`Found ${result.rowCount} result(s)`);
+    p.outro(`Found ${rows.length} result(s)`);
   } catch (error) {
     p.log.error("Query failed");
     p.log.message(error instanceof Error ? error.message : String(error));
@@ -4409,11 +3392,6 @@ async function exportEvents() {
   }
 }
 
-async function treeCommand() {
-  const args = process.argv.slice(3);
-  await tree(args);
-}
-
 async function help() {
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
@@ -4421,24 +3399,16 @@ async function help() {
   console.log(magenta("  " + getRandomMessage()));
   console.log(`
 ${cyan("Commands:")}
-  swarm                 Status dashboard (default when no subcommand)
-  swarm status          Status dashboard (same as running swarm with no args)
-    --json              Machine-readable JSON output
   swarm setup           Interactive installer - checks and installs dependencies
     --reinstall, -r     Skip prompt, go straight to reinstall
     --yes, -y           Non-interactive with defaults (opus/sonnet/haiku)
   swarm doctor          Health check - shows status of all dependencies
-    --deep              Deep DB health checks (integrity, orphans, cycles, zombies)
-    --deep --fix        Auto-repair fixable issues
-    --deep --json       Machine-readable JSON output
   swarm init      Initialize beads in current project
   swarm config    Show paths to generated config files
-  swarm claude    Claude Code integration (path/install/uninstall/init/hooks)
   swarm agents    Update AGENTS.md with skill awareness
   swarm migrate   Migrate PGlite database to libSQL
   swarm serve     Start SSE server for real-time event streaming (port 4483 - HIVE)
     --port <n>          Port to listen on (default: 4483)
-  swarm mcp-serve Debug-only MCP server (Claude auto-launches via .mcp.json)
   swarm viz       Alias for 'swarm serve' (deprecated, use serve)
     --port <n>          Port to listen on (default: 4483)
   swarm cells     List or get cells from database (replaces 'swarm tool hive_query')
@@ -4450,12 +3420,8 @@ ${cyan("Commands:")}
   swarm eval      Eval-driven development commands
   swarm query     SQL analytics with presets (--sql, --preset, --format)
   swarm dashboard Live terminal UI with worker status (--epic, --refresh)
-  swarm compliance Worker tool usage compliance stats (hivemind, skills, etc)
   swarm replay    Event replay with timing (--speed, --type, --agent, --since, --until)
   swarm export    Export events (--format otlp/csv/json, --epic, --output)
-  swarm tree      Visualize cell hierarchy as ASCII tree (--status, --epic, --json)
-  swarm session   Manage work sessions with handoff notes (start, end, status, history)
-  swarm queue     Manage distributed job queue (submit, status, list, worker)
   swarm update    Update to latest version
   swarm version   Show version and banner
   swarm tool      Execute a tool (for plugin wrapper)
@@ -4475,21 +3441,15 @@ ${cyan("Cell Management:")}
   swarm cells --json                   Raw JSON output (array, no wrapper)
 
 ${cyan("Memory Management (Hivemind):")}
-  swarm memory store <info> [options]                    Store a learning/memory
-    --tags <tags>       Comma-separated tags
-    --extract-entities  Extract and link entities (uses local LLM)
-    --debug             Show debug logging
-  swarm memory find <query> [--limit <n>]                Search all memories (semantic + FTS)
-  swarm memory get <id>                                  Get specific memory by ID
-  swarm memory remove <id>                               Delete outdated/incorrect memory
-  swarm memory validate <id>                             Confirm accuracy (resets 90-day decay)
-  swarm memory stats                                     Show database statistics
-  swarm memory index                                     Index AI sessions (use hivemind_index tool)
-  swarm memory sync                                      Sync to .hive/memories.jsonl (use hivemind_sync tool)
-  swarm memory entities [--type <type>]                  List all entities (optionally filtered by type)
-  swarm memory entity <name>                             Show entity details with taxonomy relationships
-  swarm memory taxonomy <entity> [--direction <dir>]     Show taxonomy tree (broader|narrower|related)
-  swarm memory <command> --json                          Output JSON for all commands
+  swarm memory store <info> [--tags <tags>]    Store a learning/memory
+  swarm memory find <query> [--limit <n>]      Search all memories (semantic + FTS)
+  swarm memory get <id>                        Get specific memory by ID
+  swarm memory remove <id>                     Delete outdated/incorrect memory
+  swarm memory validate <id>                   Confirm accuracy (resets 90-day decay)
+  swarm memory stats                           Show database statistics
+  swarm memory index                           Index AI sessions (use hivemind_index tool)
+  swarm memory sync                            Sync to .hive/memories.jsonl (use hivemind_sync tool)
+  swarm memory <command> --json                Output JSON for all commands
 
 ${cyan("Log Viewing:")}
   swarm log                            Tail recent logs (last 50 lines)
@@ -4510,8 +3470,6 @@ ${cyan("Stats & History:")}
   swarm stats                          Show swarm health metrics powered by swarm-insights (last 7 days)
   swarm stats --since 24h              Show stats for custom time period
   swarm stats --regressions            Show eval regressions (>10% score drops)
-  swarm stats --rejections             Show rejection reason analytics
-  swarm stats --compaction-prompts     Show compaction prompt analytics (visibility into generated prompts)
   swarm stats --json                   Output as JSON for scripting
   swarm o11y                           Show observability health dashboard (hook coverage, events, sessions)
   swarm o11y --since 7d                Custom time period for event stats (default: 7 days)
@@ -4544,50 +3502,12 @@ ${cyan("Observability Commands:")}
   swarm export --format csv            Export as CSV
   swarm export --epic <id>             Export specific epic only
   swarm export --output <file>         Write to file instead of stdout
-  swarm compliance                     Show worker tool usage compliance stats
-  swarm tree                           Show all cells as tree
-  swarm tree --status open             Show only open cells
-  swarm tree --epic <id>               Show specific epic subtree
-  swarm tree --json                    Output as JSON
-
-${cyan("Session Management (Chainlink-inspired):")}
-  swarm session start [--cell <id>]    Start new session (shows previous handoff notes)
-  swarm session end [--notes "..."]    End session with handoff notes for next session
-  swarm session status                 Show current session info
-  swarm session history [--limit n]    Show session history (default: 10)
-
-${cyan("Queue Management (BullMQ + Redis):")}
-  swarm queue submit <type> [options]  Submit job to distributed queue
-    --payload '{...}'                  Job payload (JSON)
-    --priority <n>                     Priority (lower = higher, default: 5)
-    --delay <ms>                       Delay before processing (default: 0)
-  swarm queue status <jobId>           Show job status
-  swarm queue list [--state <state>]   List jobs and metrics (waiting|active|completed|failed|delayed)
-  swarm queue worker [options]         Start worker to process jobs
-    --concurrency <n>                  Concurrent jobs (default: 5)
-    --sandbox                          Enable resource limits via systemd
 
 ${cyan("Usage in OpenCode:")}
   /swarm "Add user authentication with OAuth"
   @swarm-planner "Decompose this into parallel tasks"
   @swarm-worker "Execute this specific subtask"
   @swarm-researcher "Research Next.js caching APIs"
-
-${cyan("Claude Code:")}
-  swarm claude path                 Show bundled Claude plugin path
-  swarm claude install              Symlink plugin into ~/.claude/plugins
-  swarm claude uninstall            Remove Claude plugin symlink
-  swarm claude init                 Create project-local .claude config
-  swarm claude session-start        Hook: session start context
-  swarm claude user-prompt          Hook: prompt submit context
-  swarm claude pre-edit             Hook: pre-Edit/Write (hivemind reminder)
-  swarm claude pre-complete         Hook: pre-swarm_complete (compliance check)
-  swarm claude post-complete        Hook: post-swarm_complete (store learnings)
-  swarm claude track-tool <name>    Hook: track mandatory tool usage
-  swarm claude compliance           Hook: show session compliance data
-  swarm claude pre-compact          Hook: pre-compaction handler
-  swarm claude session-end          Hook: session cleanup
-  swarm claude skill-reload         Hook: hot-reload skills after modification
 
 ${cyan("Customization:")}
   Edit the generated files to customize behavior:
@@ -4714,100 +3634,11 @@ async function executeTool(toolName: string, argsJson?: string) {
 }
 
 /**
- * Convert OpenCode plugin schema (Zod standard schema format) to JSON Schema
- */
-function zodToJsonSchema(args: Record<string, unknown> | undefined): {
-  type: "object";
-  properties: Record<string, unknown>;
-  required?: string[];
-} {
-  if (!args) return { type: "object", properties: {} };
-
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-
-  for (const [key, schema] of Object.entries(args)) {
-    const s = schema as { type?: string; def?: { type?: string; innerType?: unknown; entries?: Record<string, string>; element?: unknown; shape?: Record<string, unknown> } };
-    const def = s.def;
-
-    // Handle optional wrapper
-    const isOptional = def?.type === "optional";
-    const innerSchema = isOptional ? (def?.innerType as typeof s) : s;
-    const innerDef = (innerSchema as typeof s).def;
-
-    if (!isOptional) {
-      required.push(key);
-    }
-
-    // Convert type
-    const schemaType = innerDef?.type || (innerSchema as typeof s).type;
-    switch (schemaType) {
-      case "string":
-        properties[key] = { type: "string" };
-        break;
-      case "number":
-        properties[key] = { type: "number" };
-        break;
-      case "boolean":
-        properties[key] = { type: "boolean" };
-        break;
-      case "enum":
-        properties[key] = {
-          type: "string",
-          enum: Object.keys(innerDef?.entries || {}),
-        };
-        break;
-      case "array": {
-        const element = innerDef?.element as typeof s | undefined;
-        const elementType = element?.def?.type || element?.type;
-        if (elementType === "object") {
-          properties[key] = {
-            type: "array",
-            items: zodToJsonSchema(element?.def?.shape as Record<string, unknown>),
-          };
-        } else {
-          properties[key] = {
-            type: "array",
-            items: { type: elementType || "string" },
-          };
-        }
-        break;
-      }
-      case "object":
-        properties[key] = zodToJsonSchema(innerDef?.shape as Record<string, unknown>);
-        break;
-      default:
-        properties[key] = { type: "string" }; // fallback
-    }
-  }
-
-  return {
-    type: "object",
-    properties,
-    ...(required.length > 0 ? { required } : {}),
-  };
-}
-
-/**
  * List all available tools
  */
-async function listTools(jsonOutput = false) {
+async function listTools() {
   // Static import at top of file
   const tools = Object.keys(allTools).sort();
-
-  // JSON output for MCP server discovery
-  if (jsonOutput) {
-    const toolList = tools.map((name) => {
-      const tool = allTools[name as keyof typeof allTools];
-      return {
-        name,
-        description: tool?.description || `Swarm tool: ${name}`,
-        inputSchema: zodToJsonSchema(tool?.args as Record<string, unknown> | undefined),
-      };
-    });
-    console.log(JSON.stringify(toolList));
-    return;
-  }
 
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
@@ -4926,304 +3757,6 @@ Read the file, make the updates, and save it. Create a backup first.`;
   }
 
   p.outro("Done");
-}
-
-// ============================================================================
-// Backup Command - Rolling database backups
-// ============================================================================
-
-const BACKUP_DIR = join(homedir(), ".config", "swarm-tools", "backups");
-const SWARM_DB_PATH = join(homedir(), ".config", "swarm-tools", "swarm.db");
-
-interface BackupInfo {
-  path: string;
-  timestamp: Date;
-  size: number;
-  type: "hourly" | "daily" | "weekly" | "manual";
-}
-
-/**
- * Get backup file path for a given type and timestamp
- */
-function getBackupPath(type: "hourly" | "daily" | "weekly" | "manual", date: Date): string {
-  const dateStr = date.toISOString().slice(0, 10); // YYYY-MM-DD
-  const timeStr = date.toISOString().slice(11, 16).replace(":", ""); // HHMM
-  return join(BACKUP_DIR, `swarm-${type}-${dateStr}-${timeStr}.db`);
-}
-
-/**
- * List all existing backups
- */
-function listBackups(): BackupInfo[] {
-  if (!existsSync(BACKUP_DIR)) return [];
-
-  const files = readdirSync(BACKUP_DIR).filter(f => f.endsWith(".db"));
-  return files.map(f => {
-    const path = join(BACKUP_DIR, f);
-    const stat = statSync(path);
-    const type = f.includes("-hourly-") ? "hourly" :
-                 f.includes("-daily-") ? "daily" :
-                 f.includes("-weekly-") ? "weekly" : "manual";
-    return {
-      path,
-      timestamp: stat.mtime,
-      size: stat.size,
-      type: type as BackupInfo["type"],
-    };
-  }).sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-}
-
-/**
- * Create a backup of the swarm database
- */
-async function createBackup(type: "hourly" | "daily" | "weekly" | "manual" = "manual"): Promise<string | null> {
-  if (!existsSync(SWARM_DB_PATH)) {
-    console.error("No swarm.db found at", SWARM_DB_PATH);
-    return null;
-  }
-
-  // Ensure backup directory exists
-  if (!existsSync(BACKUP_DIR)) {
-    mkdirSync(BACKUP_DIR, { recursive: true });
-  }
-
-  const now = new Date();
-  const backupPath = getBackupPath(type, now);
-
-  // Copy the database (use sqlite3 backup command for consistency)
-  try {
-    execSync(`sqlite3 "${SWARM_DB_PATH}" ".backup '${backupPath}'"`, {
-      encoding: "utf-8",
-      timeout: 60000,
-    });
-
-    // Verify backup
-    const srcSize = statSync(SWARM_DB_PATH).size;
-    const dstSize = statSync(backupPath).size;
-
-    if (Math.abs(srcSize - dstSize) > 1024) { // Allow 1KB difference for WAL
-      console.error(`Backup size mismatch: source ${srcSize}, backup ${dstSize}`);
-      unlinkSync(backupPath);
-      return null;
-    }
-
-    return backupPath;
-  } catch (error) {
-    console.error("Backup failed:", error);
-    return null;
-  }
-}
-
-/**
- * Rotate old backups based on retention policy
- * - Hourly: keep last 24
- * - Daily: keep last 7
- * - Weekly: keep last 4
- * - Manual: keep last 10
- */
-function rotateBackups(): { deleted: number; kept: number } {
-  const limits: Record<string, number> = {
-    hourly: 24,
-    daily: 7,
-    weekly: 4,
-    manual: 10,
-  };
-
-  const backups = listBackups();
-  const byType: Record<string, BackupInfo[]> = { hourly: [], daily: [], weekly: [], manual: [] };
-
-  for (const b of backups) {
-    byType[b.type].push(b);
-  }
-
-  let deleted = 0;
-  let kept = 0;
-
-  for (const [type, list] of Object.entries(byType)) {
-    const limit = limits[type] || 10;
-    const toKeep = list.slice(0, limit);
-    const toDelete = list.slice(limit);
-
-    kept += toKeep.length;
-
-    for (const b of toDelete) {
-      try {
-        unlinkSync(b.path);
-        deleted++;
-      } catch (error) {
-        console.error(`Failed to delete ${b.path}:`, error);
-      }
-    }
-  }
-
-  return { deleted, kept };
-}
-
-/**
- * Verify backup integrity by opening and running a simple query
- */
-async function verifyBackup(backupPath: string): Promise<boolean> {
-  try {
-    const result = execSync(`sqlite3 "${backupPath}" "SELECT COUNT(*) FROM events;"`, {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
-    return result.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Main backup command handler
- */
-async function backup(action: string) {
-  switch (action) {
-    case "create": {
-      p.intro("swarm backup v" + VERSION);
-
-      const s = p.spinner();
-      s.start("Creating backup...");
-
-      const backupPath = await createBackup("manual");
-      if (backupPath) {
-        const size = statSync(backupPath).size;
-        s.stop(`Backup created: ${backupPath} (${(size / 1024).toFixed(1)} KB)`);
-
-        // Verify
-        s.start("Verifying backup...");
-        const valid = await verifyBackup(backupPath);
-        s.stop(valid ? "Backup verified ✓" : "Backup verification FAILED");
-
-        // Rotate
-        const { deleted, kept } = rotateBackups();
-        if (deleted > 0) {
-          p.log.info(`Rotated: kept ${kept} backups, deleted ${deleted} old backups`);
-        }
-      } else {
-        s.stop("Backup failed");
-      }
-
-      p.outro("Done");
-      break;
-    }
-
-    case "list": {
-      const backups = listBackups();
-      if (backups.length === 0) {
-        console.log("No backups found");
-        return;
-      }
-
-      console.log(`\n${cyan("Backups")} (${BACKUP_DIR}):\n`);
-
-      for (const b of backups) {
-        const age = Math.round((Date.now() - b.timestamp.getTime()) / 1000 / 60);
-        const ageStr = age < 60 ? `${age}m ago` : age < 1440 ? `${Math.round(age/60)}h ago` : `${Math.round(age/1440)}d ago`;
-        const sizeStr = `${(b.size / 1024).toFixed(1)} KB`;
-        console.log(`  ${dim(b.type.padEnd(8))} ${basename(b.path)} ${dim(`(${sizeStr}, ${ageStr})`)}`);
-      }
-      console.log("");
-      break;
-    }
-
-    case "rotate": {
-      const { deleted, kept } = rotateBackups();
-      console.log(`Rotated: kept ${kept} backups, deleted ${deleted} old backups`);
-      break;
-    }
-
-    case "verify": {
-      const backups = listBackups();
-      if (backups.length === 0) {
-        console.log("No backups to verify");
-        return;
-      }
-
-      console.log(`\nVerifying ${backups.length} backups...\n`);
-
-      let passed = 0;
-      let failed = 0;
-
-      for (const b of backups) {
-        const valid = await verifyBackup(b.path);
-        if (valid) {
-          console.log(`  ${green("✓")} ${basename(b.path)}`);
-          passed++;
-        } else {
-          console.log(`  ${red("✗")} ${basename(b.path)}`);
-          failed++;
-        }
-      }
-
-      console.log(`\n${passed} passed, ${failed} failed\n`);
-      break;
-    }
-
-    case "restore": {
-      const backupFile = process.argv[4];
-      if (!backupFile) {
-        console.error("Usage: swarm backup restore <backup-file>");
-        console.error("\nAvailable backups:");
-        const backups = listBackups();
-        for (const b of backups.slice(0, 5)) {
-          console.error(`  ${basename(b.path)}`);
-        }
-        return;
-      }
-
-      const backupPath = backupFile.startsWith("/") ? backupFile : join(BACKUP_DIR, backupFile);
-      if (!existsSync(backupPath)) {
-        console.error(`Backup not found: ${backupPath}`);
-        return;
-      }
-
-      // Verify before restore
-      const valid = await verifyBackup(backupPath);
-      if (!valid) {
-        console.error("Backup verification failed - aborting restore");
-        return;
-      }
-
-      // Create a backup of current db first
-      const preRestoreBackup = await createBackup("manual");
-      console.log(`Created pre-restore backup: ${preRestoreBackup}`);
-
-      // Restore
-      try {
-        copyFileSync(backupPath, SWARM_DB_PATH);
-        console.log(`Restored from: ${backupPath}`);
-      } catch (error) {
-        console.error("Restore failed:", error);
-      }
-      break;
-    }
-
-    case "help":
-    default:
-      console.log(`
-${cyan("swarm backup")} - Database backup management
-
-${bold("Commands:")}
-  create    Create a new backup (default)
-  list      List all backups
-  rotate    Rotate old backups based on retention policy
-  verify    Verify all backups are valid
-  restore   Restore from a backup file
-
-${bold("Retention Policy:")}
-  Hourly:  24 backups
-  Daily:   7 backups
-  Weekly:  4 backups
-  Manual:  10 backups
-
-${bold("Examples:")}
-  swarm backup                    # Create a manual backup
-  swarm backup list               # List all backups
-  swarm backup restore latest.db  # Restore from a backup
-`);
-      break;
-  }
 }
 
 // ============================================================================
@@ -6195,178 +4728,7 @@ async function logs() {
  * 
  * Helps debug which database is being used and its schema state.
  */
-/**
- * Run database repair programmatically
- * Returns counts of cleaned records
- */
-async function runDbRepair(options: { dryRun: boolean }): Promise<{
-  nullBeads: number;
-  orphanedRecipients: number;
-  messagesWithoutRecipients: number;
-  expiredReservations: number;
-  totalCleaned: number;
-}> {
-  const { dryRun } = options;
-  const globalDbPath = getGlobalDbPath();
-  const swarmMail = await getSwarmMailLibSQL(globalDbPath);
-  const db = await swarmMail.getDatabase();
-
-  // Count records before cleanup
-  const nullBeadsResult = await db.query<{ count: number }>("SELECT COUNT(*) as count FROM beads WHERE id IS NULL");
-  const nullBeads = Number(nullBeadsResult[0]?.count ?? 0);
-
-  const orphanedRecipientsResult = await db.query<{ count: number }>(
-    "SELECT COUNT(*) as count FROM message_recipients WHERE NOT EXISTS (SELECT 1 FROM agents WHERE agents.name = message_recipients.agent_name)"
-  );
-  const orphanedRecipients = Number(orphanedRecipientsResult[0]?.count ?? 0);
-
-  const messagesWithoutRecipientsResult = await db.query<{ count: number }>(
-    "SELECT COUNT(*) as count FROM messages WHERE NOT EXISTS (SELECT 1 FROM message_recipients WHERE message_recipients.message_id = messages.id)"
-  );
-  const messagesWithoutRecipients = Number(messagesWithoutRecipientsResult[0]?.count ?? 0);
-
-  const expiredReservationsResult = await db.query<{ count: number }>(
-    "SELECT COUNT(*) as count FROM reservations WHERE released_at IS NULL AND expires_at < strftime('%s', 'now') * 1000"
-  );
-  const expiredReservations = Number(expiredReservationsResult[0]?.count ?? 0);
-
-  const totalCleaned = nullBeads + orphanedRecipients + messagesWithoutRecipients + expiredReservations;
-
-  // If dry run or nothing to clean, return early
-  if (dryRun || totalCleaned === 0) {
-    return {
-      nullBeads,
-      orphanedRecipients,
-      messagesWithoutRecipients,
-      expiredReservations,
-      totalCleaned,
-    };
-  }
-
-  // Execute cleanup queries
-  if (nullBeads > 0) {
-    await db.query("DELETE FROM beads WHERE id IS NULL");
-  }
-
-  if (orphanedRecipients > 0) {
-    await db.query(
-      "DELETE FROM message_recipients WHERE NOT EXISTS (SELECT 1 FROM agents WHERE agents.name = message_recipients.agent_name)"
-    );
-  }
-
-  if (messagesWithoutRecipients > 0) {
-    await db.query(
-      "DELETE FROM messages WHERE NOT EXISTS (SELECT 1 FROM message_recipients WHERE message_recipients.message_id = messages.id)"
-    );
-  }
-
-  if (expiredReservations > 0) {
-    await db.query(
-      "UPDATE reservations SET released_at = strftime('%s', 'now') * 1000 WHERE released_at IS NULL AND expires_at < strftime('%s', 'now') * 1000"
-    );
-  }
-
-  return {
-    nullBeads,
-    orphanedRecipients,
-    messagesWithoutRecipients,
-    expiredReservations,
-    totalCleaned,
-  };
-}
-
-/**
- * Database repair command (CLI interface)
- * Executes cleanup SQL to remove orphaned/invalid data
- */
-async function dbRepair() {
-  const args = process.argv.slice(4); // Skip 'swarm', 'db', 'repair'
-  let dryRun = false;
-
-  // Parse --dry-run flag
-  for (const arg of args) {
-    if (arg === "--dry-run") {
-      dryRun = true;
-    }
-  }
-
-  p.intro(dryRun ? "swarm db repair (DRY RUN)" : "swarm db repair");
-
-  const s = p.spinner();
-  s.start("Analyzing database...");
-
-  try {
-    // Use shared helper for analysis
-    const result = await runDbRepair({ dryRun: true });
-    
-    s.stop("Analysis complete");
-
-    // Show counts
-    p.log.step(dryRun ? "Would delete:" : "Deleting:");
-    if (result.nullBeads > 0) {
-      p.log.message(`  - ${result.nullBeads} beads with NULL IDs`);
-    }
-    if (result.orphanedRecipients > 0) {
-      p.log.message(`  - ${result.orphanedRecipients} orphaned message_recipients`);
-    }
-    if (result.messagesWithoutRecipients > 0) {
-      p.log.message(`  - ${result.messagesWithoutRecipients} messages without recipients`);
-    }
-    if (result.expiredReservations > 0) {
-      p.log.message(`  - ${result.expiredReservations} expired unreleased reservations`);
-    }
-
-    if (result.totalCleaned === 0) {
-      p.outro(green("✓ Database is clean! No records to delete."));
-      return;
-    }
-
-    console.log();
-    p.log.message(dim(`Total: ${result.totalCleaned} records ${dryRun ? "would be" : "will be"} cleaned`));
-    console.log();
-
-    // If dry run, stop here
-    if (dryRun) {
-      p.outro(dim("Run without --dry-run to execute cleanup"));
-      return;
-    }
-
-    // Confirm before actual deletion
-    const confirmed = await p.confirm({
-      message: `Delete ${result.totalCleaned} records?`,
-      initialValue: false,
-    });
-
-    if (p.isCancel(confirmed) || !confirmed) {
-      p.cancel("Cleanup cancelled");
-      return;
-    }
-
-    // Execute cleanup
-    const cleanupSpinner = p.spinner();
-    cleanupSpinner.start("Cleaning database...");
-
-    await runDbRepair({ dryRun: false });
-
-    cleanupSpinner.stop("Cleanup complete");
-
-    p.outro(green(`✓ Successfully cleaned ${result.totalCleaned} records`));
-  } catch (error) {
-    s.stop("Error");
-    p.log.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
-}
-
 async function db() {
-  const args = process.argv.slice(3);
-  
-  // Check for 'repair' subcommand
-  if (args[0] === "repair") {
-    await dbRepair();
-    return;
-  }
-  
   const projectPath = process.cwd();
   const projectName = basename(projectPath);
   const hash = hashLibSQLProjectPath(projectPath);
@@ -6635,8 +4997,6 @@ async function stats() {
 	let period = "7d"; // default to 7 days
 	let format: "text" | "json" = "text";
 	let showRegressions = false;
-	let showRejections = false;
-	let showCompactionPrompts = false;
 
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--since" || args[i] === "-s") {
@@ -6646,10 +5006,6 @@ async function stats() {
 			format = "json";
 		} else if (args[i] === "--regressions") {
 			showRegressions = true;
-		} else if (args[i] === "--rejections") {
-			showRejections = true;
-		} else if (args[i] === "--compaction-prompts") {
-			showCompactionPrompts = true;
 		}
 	}
 
@@ -6805,88 +5161,6 @@ async function stats() {
 				} else {
 					console.log("✅ No eval regressions detected (>10% threshold)\n");
 				}
-			}
-		} else if (showRejections) {
-			// If --rejections flag, show rejection analytics
-			const rejectionAnalytics = await getRejectionAnalytics(swarmMail);
-			
-			if (format === "json") {
-				console.log(JSON.stringify(rejectionAnalytics, null, 2));
-			} else {
-				console.log();
-				const boxWidth = 61;
-				const pad = (text: string) => text + " ".repeat(Math.max(0, boxWidth - text.length));
-				
-				console.log("┌─────────────────────────────────────────────────────────────┐");
-				console.log("│" + pad("  REJECTION ANALYSIS (last " + period + ")") + "│");
-				console.log("├─────────────────────────────────────────────────────────────┤");
-				console.log("│" + pad("  Total Reviews: " + rejectionAnalytics.totalReviews) + "│");
-				
-				const rejectionRate = rejectionAnalytics.totalReviews > 0 
-					? (100 - rejectionAnalytics.approvalRate).toFixed(0) 
-					: "0";
-				console.log("│" + pad("  Approved: " + rejectionAnalytics.approved + " (" + rejectionAnalytics.approvalRate.toFixed(0) + "%)") + "│");
-				console.log("│" + pad("  Rejected: " + rejectionAnalytics.rejected + " (" + rejectionRate + "%)") + "│");
-				console.log("│" + pad("") + "│");
-				
-				if (rejectionAnalytics.topReasons.length > 0) {
-					console.log("│" + pad("  Top Rejection Reasons:") + "│");
-					for (const reason of rejectionAnalytics.topReasons) {
-						const line = "  ├── " + reason.category + ": " + reason.count + " (" + reason.percentage.toFixed(0) + "%)";
-						console.log("│" + pad(line) + "│");
-					}
-				} else {
-					console.log("│" + pad("  No rejections in this period") + "│");
-				}
-				
-				console.log("└─────────────────────────────────────────────────────────────┘");
-				console.log();
-			}
-		} else if (showCompactionPrompts) {
-			// If --compaction-prompts flag, show compaction analytics
-			const compactionAnalytics = await getCompactionAnalytics(swarmMail);
-			
-			if (format === "json") {
-				console.log(JSON.stringify(compactionAnalytics, null, 2));
-			} else {
-				console.log();
-				const boxWidth = 61;
-				const pad = (text: string) => text + " ".repeat(Math.max(0, boxWidth - text.length));
-				
-				console.log("┌─────────────────────────────────────────────────────────────┐");
-				console.log("│" + pad("  COMPACTION PROMPT ANALYTICS (all time)") + "│");
-				console.log("├─────────────────────────────────────────────────────────────┤");
-				console.log("│" + pad("  Total Events: " + compactionAnalytics.totalEvents) + "│");
-				console.log("│" + pad("  Success Rate: " + compactionAnalytics.successRate.toFixed(1) + "%") + "│");
-				console.log("│" + pad("  Avg Prompt Size: " + compactionAnalytics.avgPromptSize + " chars") + "│");
-				console.log("│" + pad("") + "│");
-				console.log("│" + pad("  By Type:") + "│");
-				console.log("│" + pad("  ├── Prompts Generated: " + compactionAnalytics.byType.prompt_generated) + "│");
-				console.log("│" + pad("  └── Detections Failed: " + compactionAnalytics.byType.detection_failed) + "│");
-				console.log("│" + pad("") + "│");
-				console.log("│" + pad("  Confidence Distribution:") + "│");
-				console.log("│" + pad("  ├── High: " + compactionAnalytics.byConfidence.high) + "│");
-				console.log("│" + pad("  ├── Medium: " + compactionAnalytics.byConfidence.medium) + "│");
-				console.log("│" + pad("  └── Low: " + compactionAnalytics.byConfidence.low) + "│");
-				
-				if (compactionAnalytics.recentPrompts.length > 0) {
-					console.log("│" + pad("") + "│");
-					console.log("│" + pad("  Recent Prompts:") + "│");
-					for (const prompt of compactionAnalytics.recentPrompts.slice(0, 5)) {
-						const timestamp = new Date(prompt.timestamp).toLocaleDateString();
-						const conf = prompt.confidence ? ` (${prompt.confidence})` : "";
-						const line = `  ├── ${timestamp}: ${prompt.length} chars${conf}`;
-						console.log("│" + pad(line) + "│");
-						
-						if (prompt.preview) {
-							const previewLine = `      ${prompt.preview.substring(0, 50)}...`;
-							console.log("│" + pad(previewLine) + "│");
-						}
-					}
-				}
-				
-				console.log("└─────────────────────────────────────────────────────────────┘");
-				console.log();
 			}
 		} else {
 			// Normal stats output
@@ -7230,49 +5504,6 @@ async function evalRun() {
 }
 
 // ============================================================================
-// MCP Server (Debug Only)
-// ============================================================================
-
-/**
- * Start the MCP server over stdio.
- * When run non-interactively (piped stdin), runs silently for MCP protocol.
- * When run interactively (TTY), shows debug output.
- */
-async function mcpServe() {
-  const isInteractive = process.stdin.isTTY;
-
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || getClaudePluginRoot();
-  const candidates = [
-    join(pluginRoot, "bin", "swarm-mcp-server.ts"),
-    join(PACKAGE_ROOT, "bin", "swarm-mcp-server.ts"),
-  ];
-  const serverPath = candidates.find((path) => existsSync(path));
-
-  if (!serverPath) {
-    if (isInteractive) {
-      p.intro("swarm mcp-serve");
-      p.log.error("MCP server entrypoint not found");
-      p.log.message(dim(`  Looked for: ${candidates.join(", ")}`));
-      p.outro("Aborted");
-    } else {
-      console.error("[swarm-mcp] Server entrypoint not found");
-    }
-    process.exit(1);
-  }
-
-  if (isInteractive) {
-    p.intro("swarm mcp-serve");
-    p.log.step("Starting MCP server...");
-    p.log.message(dim(`  Using: ${serverPath}`));
-  }
-
-  const proc = spawn("bun", ["run", serverPath], { stdio: "inherit" });
-  proc.on("close", (exitCode) => {
-    process.exit(exitCode ?? 0);
-  });
-}
-
-// ============================================================================
 // Serve Command - Start SSE Server
 // ============================================================================
 
@@ -7489,32 +5720,22 @@ async function capture() {
  */
 function parseMemoryArgs(subcommand: string, args: string[]): {
   json: boolean;
-  debug: boolean;
-  extractEntities: boolean;
   info?: string;
   query?: string;
   id?: string;
-  name?: string;
   tags?: string;
   limit?: number;
   collection?: string;
-  type?: string;
-  direction?: string;
 } {
   let json = false;
-  let debug = false;
-  let extractEntities = false;
   let info: string | undefined;
   let query: string | undefined;
   let id: string | undefined;
-  let name: string | undefined;
   let tags: string | undefined;
   let limit: number | undefined;
   let collection: string | undefined;
-  let type: string | undefined;
-  let direction: string | undefined;
 
-  // First positional arg for store/find/get/remove/validate/entity/taxonomy
+  // First positional arg for store/find/get/remove/validate
   if (args.length > 0 && !args[0].startsWith("--")) {
     if (subcommand === "store") {
       info = args[0];
@@ -7522,8 +5743,6 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
       query = args[0];
     } else if (subcommand === "get" || subcommand === "remove" || subcommand === "validate") {
       id = args[0];
-    } else if (subcommand === "entity" || subcommand === "taxonomy") {
-      name = args[0];
     }
   }
 
@@ -7531,10 +5750,6 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
     const arg = args[i];
     if (arg === "--json") {
       json = true;
-    } else if (arg === "--debug" || arg === "-v" || arg === "--verbose") {
-      debug = true;
-    } else if (arg === "--extract-entities" || arg === "-e") {
-      extractEntities = true;
     } else if (arg === "--tags" && i + 1 < args.length) {
       tags = args[++i];
     } else if (arg === "--limit" && i + 1 < args.length) {
@@ -7542,19 +5757,15 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
       if (!isNaN(val)) limit = val;
     } else if (arg === "--collection" && i + 1 < args.length) {
       collection = args[++i];
-    } else if (arg === "--type" && i + 1 < args.length) {
-      type = args[++i];
-    } else if (arg === "--direction" && i + 1 < args.length) {
-      direction = args[++i];
     }
   }
 
-  return { json, debug, extractEntities, info, query, id, name, tags, limit, collection, type, direction };
+  return { json, info, query, id, tags, limit, collection };
 }
 
 /**
  * Memory command - unified interface to memory operations
- *
+ * 
  * Commands:
  *   swarm memory store <info> [--tags <tags>]
  *   swarm memory find <query> [--limit <n>] [--collection <name>]
@@ -7564,9 +5775,6 @@ function parseMemoryArgs(subcommand: string, args: string[]): {
  *   swarm memory stats
  *   swarm memory index
  *   swarm memory sync
- *   swarm memory entities [--type <type>]
- *   swarm memory entity <name>
- *   swarm memory taxonomy <entity> [--direction broader|narrower|related]
  */
 async function memory() {
   const subcommand = process.argv[3];
@@ -7580,20 +5788,21 @@ async function memory() {
     // Get database instance using getDb from swarm-mail
     // This returns a drizzle instance (SwarmDb) that memory adapter expects
     const { getDb } = await import("swarm-mail");
-
-    // Use single global DB: ~/.config/swarm-tools/swarm.db
-    const globalDbDir = join(homedir(), ".config", "swarm-tools");
-
-    // Ensure global DB directory exists
-    if (!existsSync(globalDbDir)) {
-      mkdirSync(globalDbDir, { recursive: true });
+    
+    // Calculate DB path (same logic as libsql.convenience.ts)
+    const tempDirName = getLibSQLProjectTempDirName(projectPath);
+    const tempDir = join(tmpdir(), tempDirName);
+    
+    // Ensure temp directory exists
+    if (!existsSync(tempDir)) {
+      mkdirSync(tempDir, { recursive: true });
     }
-
-    const dbPath = join(globalDbDir, "swarm.db");
-
+    
+    const dbPath = join(tempDir, "streams.db");
+    
     // Convert to file:// URL (required by libSQL)
     const dbUrl = `file://${dbPath}`;
-
+    
     const db = await getDb(dbUrl);
     
     // Create memory adapter with default Ollama config
@@ -7606,38 +5815,22 @@ async function memory() {
     switch (subcommand) {
       case "store": {
         if (!parsed.info) {
-          console.error("Usage: swarm memory store <information> [--tags <tags>] [--extract-entities] [--debug]");
+          console.error("Usage: swarm memory store <information> [--tags <tags>]");
           process.exit(1);
-        }
-
-        if (parsed.debug) {
-          console.log("[DEBUG] Store options:", {
-            content: parsed.info.substring(0, 50) + "...",
-            tags: parsed.tags,
-            collection: parsed.collection || "default",
-            extractEntities: parsed.extractEntities,
-          });
         }
 
         const result = await adapter.store(parsed.info, {
           tags: parsed.tags,
           collection: parsed.collection || "default",
-          extractEntities: parsed.extractEntities,
         });
 
         if (parsed.json) {
-          console.log(JSON.stringify({ success: true, id: result.id, autoTags: result.autoTags, links: result.links }));
+          console.log(JSON.stringify({ success: true, id: result.id }));
         } else {
           p.intro("swarm memory store");
           p.log.success(`Stored memory: ${result.id}`);
           if (result.autoTags) {
             p.log.message(`Auto-tags: ${result.autoTags.tags.join(", ")}`);
-          }
-          if (result.links && result.links.length > 0) {
-            p.log.message(`Linked to ${result.links.length} related memories`);
-          }
-          if (parsed.extractEntities) {
-            p.log.message(`Entity extraction: enabled`);
           }
           p.outro("Done");
         }
@@ -7781,237 +5974,6 @@ async function memory() {
         break;
       }
 
-      case "entities": {
-        const { createClient } = await import("@libsql/client");
-        const client = createClient({ url: dbUrl });
-
-        const { getEntitiesByType } = await import("swarm-mail");
-
-        let query = "SELECT id, name, entity_type, created_at FROM entities";
-        const params: string[] = [];
-
-        if (parsed.type) {
-          query += " WHERE entity_type = ?";
-          params.push(parsed.type);
-        }
-
-        query += " ORDER BY created_at DESC";
-
-        const result = await client.execute(query, params);
-
-        if (parsed.json) {
-          console.log(JSON.stringify({
-            success: true,
-            entities: result.rows.map((row) => ({
-              id: row.id,
-              name: row.name,
-              entityType: row.entity_type,
-              createdAt: row.created_at,
-            })),
-          }));
-        } else {
-          p.intro("swarm memory entities");
-          if (result.rows.length === 0) {
-            p.log.warn("No entities found");
-          } else {
-            console.log();
-            for (const row of result.rows) {
-              console.log(cyan(`[${row.id}] ${row.name}`));
-              console.log(dim(`  Type: ${row.entity_type}`));
-              console.log(dim(`  Created: ${new Date(row.created_at as string).toLocaleDateString()}`));
-            }
-          }
-          p.outro(`Found ${result.rows.length} entit${result.rows.length === 1 ? "y" : "ies"}`);
-        }
-
-        client.close();
-        break;
-      }
-
-      case "entity": {
-        if (!parsed.name) {
-          console.error("Usage: swarm memory entity <name>");
-          process.exit(1);
-        }
-
-        const { createClient } = await import("@libsql/client");
-        const client = createClient({ url: dbUrl });
-
-        const { getTaxonomyForEntity } = await import("swarm-mail");
-
-        // Lookup entity by name (case-insensitive)
-        const entityResult = await client.execute(
-          "SELECT id, name, entity_type, created_at FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
-          [parsed.name]
-        );
-
-        if (entityResult.rows.length === 0) {
-          if (parsed.json) {
-            console.log(JSON.stringify({ success: false, error: "Entity not found" }));
-          } else {
-            p.intro("swarm memory entity");
-            p.log.error(`Entity "${parsed.name}" not found`);
-            p.outro("Aborted");
-          }
-          client.close();
-          process.exit(1);
-        }
-
-        const entity = entityResult.rows[0];
-        const entityId = entity.id as string;
-
-        // Get taxonomy relationships
-        const taxonomy = await getTaxonomyForEntity(entityId, client);
-
-        // Fetch related entity names
-        const relatedIds = new Set<string>();
-        for (const rel of taxonomy) {
-          relatedIds.add(rel.entityId);
-          relatedIds.add(rel.relatedEntityId);
-        }
-
-        const relatedEntities = new Map<string, string>();
-        for (const id of relatedIds) {
-          const res = await client.execute("SELECT name FROM entities WHERE id = ? LIMIT 1", [id]);
-          if (res.rows.length > 0) {
-            relatedEntities.set(id, res.rows[0].name as string);
-          }
-        }
-
-        if (parsed.json) {
-          console.log(JSON.stringify({
-            success: true,
-            entity: {
-              id: entity.id,
-              name: entity.name,
-              entityType: entity.entity_type,
-              createdAt: entity.created_at,
-            },
-            taxonomy: taxonomy.map((rel) => ({
-              id: rel.id,
-              subjectEntity: relatedEntities.get(rel.entityId),
-              relationshipType: rel.relationshipType,
-              relatedEntity: relatedEntities.get(rel.relatedEntityId),
-            })),
-          }));
-        } else {
-          p.intro(`swarm memory entity: ${entity.name}`);
-          console.log();
-          console.log(cyan("Entity Details:"));
-          console.log(`  ID: ${entity.id}`);
-          console.log(`  Name: ${entity.name}`);
-          console.log(`  Type: ${entity.entity_type}`);
-          console.log(`  Created: ${new Date(entity.created_at as string).toLocaleDateString()}`);
-
-          if (taxonomy.length > 0) {
-            console.log();
-            console.log(cyan("Taxonomy Relationships:"));
-            for (const rel of taxonomy) {
-              const subject = relatedEntities.get(rel.entityId);
-              const related = relatedEntities.get(rel.relatedEntityId);
-              console.log(`  ${subject} ${dim(`--[${rel.relationshipType}]-->`)} ${related}`);
-            }
-          } else {
-            console.log();
-            console.log(dim("  No taxonomy relationships"));
-          }
-
-          p.outro("Done");
-        }
-
-        client.close();
-        break;
-      }
-
-      case "taxonomy": {
-        if (!parsed.name) {
-          console.error("Usage: swarm memory taxonomy <entity> [--direction broader|narrower|related]");
-          process.exit(1);
-        }
-
-        const { createClient } = await import("@libsql/client");
-        const client = createClient({ url: dbUrl });
-
-        const { getTaxonomyForEntity, findByTaxonomy } = await import("swarm-mail");
-
-        // Lookup entity by name (case-insensitive)
-        const entityResult = await client.execute(
-          "SELECT id, name FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
-          [parsed.name]
-        );
-
-        if (entityResult.rows.length === 0) {
-          if (parsed.json) {
-            console.log(JSON.stringify({ success: false, error: "Entity not found" }));
-          } else {
-            p.intro("swarm memory taxonomy");
-            p.log.error(`Entity "${parsed.name}" not found`);
-            p.outro("Aborted");
-          }
-          client.close();
-          process.exit(1);
-        }
-
-        const entity = entityResult.rows[0];
-        const entityId = entity.id as string;
-
-        let relatedIds: string[];
-
-        if (parsed.direction === "broader" || parsed.direction === "narrower" || parsed.direction === "related") {
-          // Filter by relationship type
-          relatedIds = await findByTaxonomy(entityId, parsed.direction, client);
-        } else {
-          // Get all relationships
-          const taxonomy = await getTaxonomyForEntity(entityId, client);
-          relatedIds = taxonomy
-            .filter((rel) => rel.entityId === entityId)
-            .map((rel) => rel.relatedEntityId);
-        }
-
-        // Fetch related entity details
-        const relatedEntities: Array<{ id: string; name: string; relationshipType?: string }> = [];
-        for (const id of relatedIds) {
-          const res = await client.execute("SELECT name FROM entities WHERE id = ? LIMIT 1", [id]);
-          if (res.rows.length > 0) {
-            relatedEntities.push({
-              id,
-              name: res.rows[0].name as string,
-            });
-          }
-        }
-
-        if (parsed.json) {
-          console.log(JSON.stringify({
-            success: true,
-            entity: {
-              id: entity.id,
-              name: entity.name,
-            },
-            direction: parsed.direction || "all",
-            related: relatedEntities,
-          }));
-        } else {
-          const directionLabel = parsed.direction
-            ? `${parsed.direction} relationships`
-            : "all relationships";
-          p.intro(`swarm memory taxonomy: ${entity.name} (${directionLabel})`);
-
-          if (relatedEntities.length === 0) {
-            p.log.warn("No related entities found");
-          } else {
-            console.log();
-            for (const rel of relatedEntities) {
-              console.log(`  ${cyan(rel.name)} ${dim(`[${rel.id}]`)}`);
-            }
-          }
-
-          p.outro(`Found ${relatedEntities.length} related entit${relatedEntities.length === 1 ? "y" : "ies"}`);
-        }
-
-        client.close();
-        break;
-      }
-
       case "sync": {
         // Sync is a stub - actual sync happens via .hive/memories.jsonl
         // which is handled by hivemind_sync tool
@@ -8032,20 +5994,17 @@ async function memory() {
         console.error("Usage: swarm memory <subcommand> [options]");
         console.error("");
         console.error("Subcommands:");
-        console.error("  store <info> [--tags <tags>]                  Store a memory");
-        console.error("  find <query> [--limit <n>]                    Search memories");
-        console.error("  get <id>                                      Get memory by ID");
-        console.error("  remove <id>                                   Delete memory");
-        console.error("  validate <id>                                 Reset decay timer");
-        console.error("  stats                                         Show database stats");
-        console.error("  index                                         Index sessions (use hivemind_index)");
-        console.error("  sync                                          Sync to git (use hivemind_sync)");
-        console.error("  entities [--type <type>]                      List all entities (optionally filtered by type)");
-        console.error("  entity <name>                                 Show entity details with taxonomy relationships");
-        console.error("  taxonomy <entity> [--direction <dir>]         Show taxonomy tree (direction: broader|narrower|related)");
+        console.error("  store <info> [--tags <tags>]         Store a memory");
+        console.error("  find <query> [--limit <n>]           Search memories");
+        console.error("  get <id>                             Get memory by ID");
+        console.error("  remove <id>                          Delete memory");
+        console.error("  validate <id>                        Reset decay timer");
+        console.error("  stats                                Show database stats");
+        console.error("  index                                Index sessions (use hivemind_index)");
+        console.error("  sync                                 Sync to git (use hivemind_sync)");
         console.error("");
         console.error("Global options:");
-        console.error("  --json                                        Output JSON");
+        console.error("  --json                               Output JSON");
         process.exit(1);
       }
     }
@@ -8079,14 +6038,8 @@ switch (command) {
     break;
   }
   case "doctor": {
-    const deepFlag = process.argv.includes("--deep");
-    if (deepFlag) {
-      const { doctorDeep } = await import("./commands/doctor.js");
-      await doctorDeep(process.argv.slice(3));
-    } else {
-      const debugFlag = process.argv.includes("--debug") || process.argv.includes("-d");
-      await doctor(debugFlag);
-    }
+    const debugFlag = process.argv.includes("--debug") || process.argv.includes("-d");
+    await doctor(debugFlag);
     break;
   }
   case "init":
@@ -8094,12 +6047,6 @@ switch (command) {
     break;
   case "config":
     config();
-    break;
-  case "claude":
-    await claudeCommand();
-    break;
-  case "mcp-serve":
-    await mcpServe();
     break;
   case "serve":
     await serve();
@@ -8113,8 +6060,7 @@ switch (command) {
   case "tool": {
     const toolName = process.argv[3];
     if (!toolName || toolName === "--list" || toolName === "-l") {
-      const jsonOutput = process.argv.includes("--json");
-      await listTools(jsonOutput);
+      await listTools();
     } else {
       // Look for --json flag
       const jsonFlagIndex = process.argv.indexOf("--json");
@@ -8132,11 +6078,6 @@ switch (command) {
   case "migrate":
     await migrate();
     break;
-  case "backup": {
-    const backupAction = process.argv[3] || "create";
-    await backup(backupAction);
-    break;
-  }
   case "db":
     await db();
     break;
@@ -8145,7 +6086,7 @@ switch (command) {
     break;
   case "log":
   case "logs":
-    await log();
+    await logs();
     break;
   case "stats":
     await stats();
@@ -8171,26 +6112,11 @@ switch (command) {
   case "dashboard":
     await dashboard();
     break;
-  case "compliance":
-    await showWorkerCompliance();
-    break;
   case "replay":
     await replay();
     break;
   case "export":
     await exportEvents();
-    break;
-  case "tree":
-    await treeCommand();
-    break;
-  case "session":
-    await session();
-    break;
-  case "queue":
-    await queue();
-    break;
-  case "status":
-    await status(process.argv.slice(3));
     break;
   case "version":
   case "--version":
@@ -8203,7 +6129,7 @@ switch (command) {
     await help();
     break;
   case undefined:
-    await status(process.argv.slice(3));
+    await setup();
     break;
   default:
     console.error("Unknown command: " + command);
