@@ -4,6 +4,11 @@
   "description": "Multi-agent swarm coordination plugin for Clawdbot - hivemind memory, cells, and swarm workflows",
   "type": "module",
   "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "clawdbot": {
     "extensions": [
       "./index.ts"
@@ -22,14 +27,19 @@
     "typescript": "^5.7.0"
   },
   "peerDependencies": {
+    "openclaw": "*",
     "clawdbot": "*"
   },
   "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    },
     "clawdbot": {
       "optional": true
     }
   },
   "files": [
+    "openclaw.plugin.json",
     "clawdbot.plugin.json",
     "index.ts",
     "bin",

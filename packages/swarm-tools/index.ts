@@ -7,7 +7,7 @@
  * - Swarmmail: agent coordination
  * - Swarm: parallel workflow orchestration
  */
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { execFileSync } from "child_process";
 
 function executeSwarmTool(name: string, args: Record<string, unknown>): string {
@@ -804,7 +804,7 @@ const swarmPlugin = {
     additionalProperties: false,
   },
 
-  register(api: MoltbotPluginApi) {
+  register(api: OpenClawPluginApi) {
     const cfg = {
       autoRecall: true,
       autoCapture: true,
