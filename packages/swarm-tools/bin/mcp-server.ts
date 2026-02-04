@@ -4,22 +4,20 @@
  *
  * This is a fallback for MCP-based tool registration.
  * The main plugin uses clawdbot's native plugin API instead.
+ *
+ * Tool schemas are imported from the canonical SWARM_TOOLS definitions
+ * in ../index.ts (not scraped from CLI, which never supported --json).
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { execSync, execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 import { z } from "zod";
 import { randomBytes } from "crypto";
+import { SWARM_TOOLS } from "../index.js";
 
 // Generate a persistent session ID for this MCP server instance
 // This ensures all tool calls within the same MCP connection share state
 const MCP_SESSION_ID = `mcp-${randomBytes(8).toString("hex")}`;
-
-interface ToolInfo {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
 
 const ALLOWED_TOOLS = new Set([
   // Hive
@@ -65,18 +63,6 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
   return z.object(shape).passthrough();
 }
 
-function getToolDefinitions(): ToolInfo[] {
-  try {
-    const output = execSync("swarm tool --list --json 2>/dev/null", {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
-    return JSON.parse(output);
-  } catch {
-    return [];
-  }
-}
-
 function executeTool(name: string, args: Record<string, unknown>): string {
   try {
     const argsJson = JSON.stringify(args);
@@ -106,12 +92,12 @@ async function main(): Promise<void> {
 
   const server = new McpServer({ name: "swarm-tools", version: "0.59.5" });
 
-  const allTools = getToolDefinitions();
-  const tools = allTools.filter(t => ALLOWED_TOOLS.has(t.name));
-  console.error(`[swarm-mcp] Registering ${tools.length} tools`);
+  // Use canonical tool definitions from SWARM_TOOLS, filtered by ALLOWED_TOOLS
+  const tools = SWARM_TOOLS.filter(t => ALLOWED_TOOLS.has(t.name));
+  console.error(`[swarm-mcp] Registering ${tools.length} tools (from ${SWARM_TOOLS.length} available)`);
 
   for (const tool of tools) {
-    const zodSchema = jsonSchemaToZod(tool.inputSchema);
+    const zodSchema = jsonSchemaToZod(tool.parameters as Record<string, unknown>);
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: zodSchema },

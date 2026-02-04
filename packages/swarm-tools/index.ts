@@ -27,7 +27,8 @@ function executeSwarmTool(name: string, args: Record<string, unknown>): string {
 }
 
 // Tool definitions with proper schemas
-const SWARM_TOOLS = [
+// Exported for use by MCP server (bin/mcp-server.ts)
+export const SWARM_TOOLS = [
   // Hive - cell/task management
   {
     name: "hive_cells",

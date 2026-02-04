@@ -7,7 +7,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { execSync, execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 import { z } from "zod";
 import { randomBytes } from "crypto";
 
@@ -22,64 +22,390 @@ interface ToolInfo {
 }
 
 /**
- * Tools exposed to Claude Code.
+ * Tool definitions with proper JSON schemas.
+ *
+ * These are the canonical schemas for all MCP-exposed swarm tools.
+ * Previously these were scraped from the CLI at startup, but `swarm tool --list --json`
+ * was never implemented, causing all schemas to be empty and all params to arrive as undefined.
+ *
  * Organized by user-facing vs agent-internal.
  */
-const ALLOWED_TOOLS = new Set([
+const TOOL_DEFINITIONS: ToolInfo[] = [
   // ========== USER-FACING ==========
 
   // Hive - task/cell management
-  "hive_cells",
-  "hive_create",
-  "hive_create_epic",
-  "hive_close",
-  "hive_query",
-  "hive_ready",
-  "hive_update",
-  "hive_projects",
+  {
+    name: "hive_cells",
+    description: "Query cells from hive with filters (status, type, ready, parent_id). Supports cross-project queries via project_key.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "Filter by status: open, in_progress, blocked, closed" },
+        type: { type: "string", description: "Filter by type: task, bug, feature, epic, chore" },
+        ready: { type: "boolean", description: "Get only unblocked cells" },
+        parent_id: { type: "string", description: "Get children of an epic" },
+        id: { type: "string", description: "Get specific cell by partial ID" },
+        limit: { type: "number", description: "Max results" },
+        project_key: { type: "string", description: "Override project scope (use hive_projects to list available)" },
+      },
+    },
+  },
+  {
+    name: "hive_create",
+    description: "Create a new cell in the hive",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Cell title (required)" },
+        description: { type: "string", description: "Cell description" },
+        type: { type: "string", description: "Cell type: task, bug, feature, epic, chore" },
+        priority: { type: "number", description: "Priority (lower = higher priority)" },
+        parent_id: { type: "string", description: "Parent epic ID" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "hive_create_epic",
+    description: "Create epic with subtasks atomically",
+    inputSchema: {
+      type: "object",
+      properties: {
+        epic_title: { type: "string", description: "Epic title (required)" },
+        epic_description: { type: "string", description: "Epic description" },
+        subtasks: { type: "string", description: "JSON array of subtasks [{title, files?, priority?}]" },
+        strategy: { type: "string", description: "Decomposition strategy: file-based, feature-based, risk-based" },
+      },
+      required: ["epic_title", "subtasks"],
+    },
+  },
+  {
+    name: "hive_close",
+    description: "Close a cell with reason",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Cell ID (required)" },
+        reason: { type: "string", description: "Closure reason (required)" },
+      },
+      required: ["id", "reason"],
+    },
+  },
+  {
+    name: "hive_query",
+    description: "Query hive cells with filters (same as hive_cells)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "Filter by status: open, in_progress, blocked, closed" },
+        type: { type: "string", description: "Filter by type: task, bug, feature, epic, chore" },
+        ready: { type: "boolean", description: "Get only unblocked cells" },
+        parent_id: { type: "string", description: "Get children of an epic" },
+        limit: { type: "number", description: "Max results" },
+      },
+    },
+  },
+  {
+    name: "hive_ready",
+    description: "Get the next ready (unblocked, highest priority) cell",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "hive_update",
+    description: "Update cell status or description",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Cell ID (required)" },
+        status: { type: "string", description: "New status: open, in_progress, blocked, closed" },
+        description: { type: "string", description: "New description" },
+        priority: { type: "number", description: "New priority" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "hive_projects",
+    description: "List all projects with hive cells. Shows project_key, cell counts, and which is current.",
+    inputSchema: { type: "object", properties: {} },
+  },
 
   // Hivemind - unified memory
-  "hivemind_find",
-  "hivemind_store",
-  "hivemind_get",
-  "hivemind_stats",
+  {
+    name: "hivemind_find",
+    description: "Search memories by semantic similarity or full-text",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query (required)" },
+        limit: { type: "number", description: "Max results (default 5)" },
+        fts: { type: "boolean", description: "Use full-text search instead of semantic" },
+        expand: { type: "boolean", description: "Return expanded context" },
+        collection: { type: "string", description: "Filter by collection" },
+        decayTier: { type: "string", description: "Filter by decay tier: hot, warm, cold, stale" },
+        project_key: { type: "string", description: "Override project scope (default: current working directory)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "hivemind_store",
+    description: "Store a memory with semantic embedding",
+    inputSchema: {
+      type: "object",
+      properties: {
+        information: { type: "string", description: "Information to store (required)" },
+        tags: { type: "string", description: "Comma-separated tags" },
+        collection: { type: "string", description: "Collection name (default: 'default')" },
+        confidence: { type: "number", description: "Confidence score 0-1" },
+        extractEntities: { type: "boolean", description: "Extract entities from content" },
+        autoTag: { type: "boolean", description: "Auto-tag based on content analysis" },
+        autoLink: { type: "boolean", description: "Auto-link to related memories" },
+        project_key: { type: "string", description: "Override project scope (default: current working directory)" },
+      },
+      required: ["information"],
+    },
+  },
+  {
+    name: "hivemind_get",
+    description: "Retrieve a specific memory by ID",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Memory ID (required)" },
+        project_key: { type: "string", description: "Override project scope (default: current working directory)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "hivemind_stats",
+    description: "Get hivemind memory statistics - counts, embeddings, health",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_key: { type: "string", description: "Override project scope (default: current working directory)" },
+      },
+    },
+  },
 
   // Swarmmail - agent coordination
-  "swarmmail_inbox",
-  "swarmmail_send",
-  "swarmmail_reserve",
-  "swarmmail_release",
-  "swarmmail_init",
+  {
+    name: "swarmmail_init",
+    description: "Initialize swarm mail session for agent coordination",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Agent name" },
+        project_path: { type: "string", description: "Project path" },
+        task_description: { type: "string", description: "Task description" },
+      },
+    },
+  },
+  {
+    name: "swarmmail_inbox",
+    description: "Fetch inbox messages from other agents",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max messages" },
+        urgent_only: { type: "boolean", description: "Only urgent messages" },
+      },
+    },
+  },
+  {
+    name: "swarmmail_send",
+    description: "Send message to other swarm agents",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient agent names (JSON array)" },
+        subject: { type: "string", description: "Message subject (required)" },
+        body: { type: "string", description: "Message body (required)" },
+        importance: { type: "string", description: "low, normal, high, urgent" },
+        thread_id: { type: "string", description: "Thread ID for replies" },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+  {
+    name: "swarmmail_reserve",
+    description: "Reserve file paths for exclusive editing",
+    inputSchema: {
+      type: "object",
+      properties: {
+        paths: { type: "string", description: "File paths to reserve (required)" },
+        reason: { type: "string", description: "Reservation reason" },
+        exclusive: { type: "boolean", description: "Exclusive lock" },
+        ttl_seconds: { type: "number", description: "Time-to-live in seconds" },
+      },
+      required: ["paths"],
+    },
+  },
+  {
+    name: "swarmmail_release",
+    description: "Release file reservations",
+    inputSchema: {
+      type: "object",
+      properties: {
+        paths: { type: "string", description: "File paths to release (JSON array)" },
+        reservation_ids: { type: "string", description: "Reservation IDs to release (JSON array)" },
+      },
+    },
+  },
 
-  // Core swarm
-  "swarm_decompose",
-  "swarm_status",
+  // ========== CORE SWARM ==========
+  {
+    name: "swarm_decompose",
+    description: "Generate decomposition prompt for parallel subtasks",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Task to decompose (required)" },
+        context: { type: "string", description: "Additional context" },
+        query_cass: { type: "boolean", description: "Query hivemind for similar tasks" },
+      },
+      required: ["task"],
+    },
+  },
+  {
+    name: "swarm_status",
+    description: "Get status of a swarm by epic ID",
+    inputSchema: {
+      type: "object",
+      properties: {
+        epic_id: { type: "string", description: "Epic ID (required)" },
+        project_key: { type: "string", description: "Project key (required)" },
+      },
+      required: ["epic_id", "project_key"],
+    },
+  },
 
   // ========== AGENT-INTERNAL ==========
   // Used by coordinator/worker agents
-
-  // Coordinator tools
-  "swarm_plan_prompt",
-  "swarm_validate_decomposition",
-  "swarm_spawn_subtask",
-  "swarm_review",
-  "swarm_review_feedback",
-
-  // Worker tools
-  "swarm_progress",
-  "swarm_complete",
-]);
+  {
+    name: "swarm_plan_prompt",
+    description: "Generate strategy-specific decomposition prompt with hivemind context",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Task to plan (required)" },
+        strategy: { type: "string", description: "Strategy: file-based, feature-based, risk-based, auto" },
+        context: { type: "string", description: "Additional context" },
+        query_cass: { type: "boolean", description: "Query hivemind for similar tasks" },
+        cass_limit: { type: "number", description: "Max hivemind results" },
+        include_skills: { type: "boolean", description: "Include skill recommendations" },
+      },
+      required: ["task"],
+    },
+  },
+  {
+    name: "swarm_validate_decomposition",
+    description: "Validate decomposition JSON before creating epic - checks file conflicts and dependencies",
+    inputSchema: {
+      type: "object",
+      properties: {
+        response: { type: "string", description: "JSON string with {epic: {title, description}, subtasks: [{title, files, dependencies}]} (required)" },
+        task: { type: "string", description: "Original task description" },
+        strategy: { type: "string", description: "Strategy used: file-based, feature-based, risk-based, auto" },
+        project_path: { type: "string", description: "Project path for file validation" },
+        epic_id: { type: "string", description: "Existing epic ID if updating" },
+        context: { type: "string", description: "Additional context" },
+      },
+      required: ["response"],
+    },
+  },
+  {
+    name: "swarm_spawn_subtask",
+    description: "Prepare a subtask for spawning with agent mail tracking",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bead_id: { type: "string", description: "Bead/cell ID (required)" },
+        epic_id: { type: "string", description: "Epic ID (required)" },
+        subtask_title: { type: "string", description: "Subtask title (required)" },
+        files: { type: "string", description: "Files to work on (JSON array, required)" },
+        subtask_description: { type: "string", description: "Subtask description" },
+        project_path: { type: "string", description: "Project path" },
+        shared_context: { type: "string", description: "Shared context for worker" },
+      },
+      required: ["bead_id", "epic_id", "subtask_title", "files"],
+    },
+  },
+  {
+    name: "swarm_review",
+    description: "Generate a review prompt for a completed subtask with epic context and diff",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_key: { type: "string", description: "Project key (required)" },
+        epic_id: { type: "string", description: "Epic ID (required)" },
+        task_id: { type: "string", description: "Task/cell ID (required)" },
+        files_touched: { type: "string", description: "Files touched (JSON array)" },
+      },
+      required: ["project_key", "epic_id", "task_id"],
+    },
+  },
+  {
+    name: "swarm_review_feedback",
+    description: "Send review feedback to a worker - tracks attempts (max 3 rejections)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_key: { type: "string", description: "Project key (required)" },
+        task_id: { type: "string", description: "Task/cell ID (required)" },
+        worker_id: { type: "string", description: "Worker agent ID (required)" },
+        status: { type: "string", description: "Review status: approved, needs_changes (required)" },
+        summary: { type: "string", description: "Review summary" },
+        issues: { type: "string", description: "Issues to address if needs_changes" },
+      },
+      required: ["project_key", "task_id", "worker_id", "status"],
+    },
+  },
+  {
+    name: "swarm_progress",
+    description: "Report progress on a subtask to coordinator",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_key: { type: "string", description: "Project key (required)" },
+        agent_name: { type: "string", description: "Agent name (required)" },
+        bead_id: { type: "string", description: "Bead/cell ID (required)" },
+        status: { type: "string", description: "Status: in_progress, blocked, completed, failed (required)" },
+        progress_percent: { type: "number", description: "Progress percentage" },
+        message: { type: "string", description: "Status message" },
+        files_touched: { type: "string", description: "Files touched (JSON array)" },
+      },
+      required: ["project_key", "agent_name", "bead_id", "status"],
+    },
+  },
+  {
+    name: "swarm_complete",
+    description: "Mark subtask complete with verification gate",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_key: { type: "string", description: "Project key (required)" },
+        agent_name: { type: "string", description: "Agent name (required)" },
+        bead_id: { type: "string", description: "Bead/cell ID (required)" },
+        summary: { type: "string", description: "Work summary (required)" },
+        start_time: { type: "number", description: "Start timestamp (required)" },
+        files_touched: { type: "string", description: "Files touched (JSON array)" },
+        skip_verification: { type: "boolean", description: "Skip verification gate" },
+      },
+      required: ["project_key", "agent_name", "bead_id", "summary", "start_time"],
+    },
+  },
+];
 
 /**
- * Filter to only allowed user-facing tools.
+ * Set of allowed tool names for quick filtering.
  */
-function filterTools(tools: ToolInfo[]): ToolInfo[] {
-  return tools.filter(tool => ALLOWED_TOOLS.has(tool.name));
-}
+const ALLOWED_TOOLS = new Set(TOOL_DEFINITIONS.map(t => t.name));
 
 /**
  * Convert JSON Schema to Zod schema for MCP SDK.
- * Handles the common types we get from the swarm CLI.
+ * Handles the common types used in tool parameter schemas.
  */
 function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
   const props = schema.properties as Record<string, { type?: string; enum?: string[]; items?: Record<string, unknown> }> | undefined;
@@ -124,45 +450,6 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
   }
 
   return z.object(shape).passthrough(); // passthrough allows extra properties
-}
-
-/**
- * Get tool definitions from swarm CLI.
- * Falls back to empty list if CLI not available.
- */
-function getToolDefinitions(): ToolInfo[] {
-  try {
-    // Get tool list with schema info from swarm CLI
-    const output = execSync("swarm tool --list --json 2>/dev/null", {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
-    return JSON.parse(output);
-  } catch {
-    // Fallback: get just tool names
-    try {
-      const output = execSync("swarm tool --list 2>/dev/null", {
-        encoding: "utf-8",
-        timeout: 10000,
-      });
-      // Parse the grouped output to extract tool names
-      const tools: ToolInfo[] = [];
-      for (const line of output.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.endsWith(":") && !trimmed.includes("SWARM") && !trimmed.includes("Available")) {
-          tools.push({
-            name: trimmed,
-            description: `Swarm tool: ${trimmed}`,
-            inputSchema: { type: "object", properties: {}, additionalProperties: true },
-          });
-        }
-      }
-      return tools;
-    } catch {
-      console.error("[swarm-mcp] Failed to get tool list from swarm CLI");
-      return [];
-    }
-  }
 }
 
 /**
@@ -257,12 +544,10 @@ async function main(): Promise<void> {
     version: getSwarmVersion(),
   });
 
-  // Get tools from CLI, filter deprecated ones, and register
-  const allTools = getToolDefinitions();
-  const tools = filterTools(allTools);
-  console.error(`[swarm-mcp] Registering ${tools.length} tools (filtered from ${allTools.length})`);
+  // Register tools with proper schemas (inline definitions, not scraped from CLI)
+  console.error(`[swarm-mcp] Registering ${TOOL_DEFINITIONS.length} tools`);
 
-  for (const tool of tools) {
+  for (const tool of TOOL_DEFINITIONS) {
     // Convert JSON Schema from CLI to Zod for MCP SDK
     const zodSchema = jsonSchemaToZod(tool.inputSchema);
 
