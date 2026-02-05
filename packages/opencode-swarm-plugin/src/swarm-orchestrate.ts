@@ -2694,6 +2694,9 @@ interface SwarmBeadContext {
     shared_context?: string;
     skills_to_load?: string[];
     coordinator_notes?: string;
+    branch_label?: string;
+    branch_purpose?: string;
+    branch_id?: string;
   };
   recovery: {
     last_checkpoint: number;
