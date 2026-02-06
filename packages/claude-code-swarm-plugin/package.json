@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "bun build bin/mcp-server.ts --outfile bin/mcp-server.js --target node --minify",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "version": "bun run ../opencode-swarm-plugin/scripts/sync-plugin-versions.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.25.2",
