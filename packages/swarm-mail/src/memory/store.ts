@@ -448,12 +448,14 @@ export function createMemoryStore(db: SwarmDb) {
      * @returns Memory and embedding counts
      */
     async getStats(): Promise<{ memories: number; embeddings: number }> {
+      // libSQL bug: COUNT(*) returns 0 on tables with F32_BLOB vector columns.
+      // Workaround: use COUNT(id) which skips the vector column scan.
       const memoryCount = await db
-        .select({ count: sql<number>`COUNT(*)` })
+        .select({ count: sql<number>`COUNT(id)` })
         .from(memories);
 
       const embeddingCount = await db
-        .select({ count: sql<number>`COUNT(*)` })
+        .select({ count: sql<number>`COUNT(id)` })
         .from(memories)
         .where(sql`embedding IS NOT NULL`);
 

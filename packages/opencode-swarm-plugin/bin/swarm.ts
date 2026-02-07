@@ -4956,7 +4956,8 @@ async function db() {
       }
       
       try {
-        const memoryCount = execSync(`sqlite3 "${dbFile}" "SELECT COUNT(*) FROM memories"`, { encoding: "utf-8" }).trim();
+        // libSQL bug: COUNT(*) returns 0 on tables with F32_BLOB vector columns
+        const memoryCount = execSync(`sqlite3 "${dbFile}" "SELECT COUNT(id) FROM memories"`, { encoding: "utf-8" }).trim();
         console.log(`  ${dim("○")} Memories: ${memoryCount}`);
       } catch {
         // Table doesn't exist yet
@@ -5951,22 +5952,20 @@ async function memory() {
   try {
     // Get database instance using getDb from swarm-mail
     // This returns a drizzle instance (SwarmDb) that memory adapter expects
-    const { getDb } = await import("swarm-mail");
-    
-    // Calculate DB path (same logic as libsql.convenience.ts)
-    const tempDirName = getLibSQLProjectTempDirName(projectPath);
-    const tempDir = join(tmpdir(), tempDirName);
-    
-    // Ensure temp directory exists
-    if (!existsSync(tempDir)) {
-      mkdirSync(tempDir, { recursive: true });
+    // IMPORTANT: Memory is global, not per-project. Use getGlobalDbPath().
+    const { getDb, getGlobalDbPath } = await import("swarm-mail");
+
+    const globalDbPath = getGlobalDbPath();
+    const globalDbDir = dirname(globalDbPath);
+
+    // Ensure global config directory exists
+    if (!existsSync(globalDbDir)) {
+      mkdirSync(globalDbDir, { recursive: true });
     }
-    
-    const dbPath = join(tempDir, "streams.db");
-    
+
     // Convert to file:// URL (required by libSQL)
-    const dbUrl = `file://${dbPath}`;
-    
+    const dbUrl = `file://${globalDbPath}`;
+
     const db = await getDb(dbUrl);
     
     // Create memory adapter with default Ollama config

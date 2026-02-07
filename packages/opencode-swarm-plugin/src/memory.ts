@@ -191,8 +191,10 @@ async function maybeAutoMigrate(db: DatabaseAdapter): Promise<void> {
 		}
 
 		// Check if target database is empty using the legacy adapter
+		// Note: COUNT(*) returns 0 on libSQL tables with F32_BLOB vector columns.
+		// Use COUNT(id) as workaround.
 		const countResult = await db.query<{ count: string }>(
-			"SELECT COUNT(*) as count FROM memories",
+			"SELECT COUNT(id) as count FROM memories",
 		);
 		const memoryCount = parseInt(countResult.rows[0]?.count || "0");
 
