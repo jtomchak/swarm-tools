@@ -34,8 +34,8 @@ export default async function handler(event: HookEvent): Promise<void> {
     // New session - query hivemind for relevant context
     try {
       const result = executeSwarmTool("hivemind_find", {
-        query: `project context recent learnings for ${sessionKey}`,
-        limit: 5,
+        query: `key decisions learnings gotchas`,
+        limit: 3,
         expand: true,
       });
 
@@ -46,7 +46,7 @@ export default async function handler(event: HookEvent): Promise<void> {
           .join("\n");
 
         // Push message to be shown to user
-        event.messages?.push(`\n📚 Loaded ${parsed.data.results.length} prior learnings from hivemind`);
+        event.messages?.push(`\nLoaded ${parsed.data.results.length} prior learnings from hivemind`);
 
         console.log(`[session-to-hivemind] Loaded ${parsed.data.results.length} memories for session`);
       }
@@ -56,9 +56,16 @@ export default async function handler(event: HookEvent): Promise<void> {
   }
 
   if (event.type === "session" && event.action === "end") {
-    // Session ending - store summary
+    // Session ending - store summary (only if we have a real one)
     try {
-      const summary = event.context?.summary as string || "Session ended without summary";
+      const summary = event.context?.summary as string | undefined;
+
+      // Don't store garbage — require a meaningful summary
+      if (!summary || summary.length < 50) {
+        console.log(`[session-to-hivemind] Skipping session store: no meaningful summary`);
+        return;
+      }
+
       const timestamp = new Date().toISOString();
 
       executeSwarmTool("hivemind_store", {

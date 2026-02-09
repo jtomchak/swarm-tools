@@ -603,12 +603,14 @@ function markAsStored(text: string): void {
   }
 }
 
-// Patterns that indicate content worth storing
-const CAPTURE_PATTERNS = [
-  /\b(prefer|like|want|need|always|never|usually|remember)\b/i,
-  /\b(decision|decided|chose|choice|important|note)\b/i,
-  /\b(learned|discovered|found out|realized)\b/i,
-  /\b(project|task|todo|deadline|meeting)\b/i,
+// Patterns that indicate content worth storing (must signal actual knowledge, not system logs)
+const STRONG_CAPTURE_PATTERNS = [
+  /\b(prefer|always use|never use|convention is|standard is)\b/i,
+  /\b(decided to|chose .+ because|decision:|the approach is)\b/i,
+  /\b(learned that|discovered that|found out that|realized that|turns out|gotcha:|pitfall:)\b/i,
+  /\b(pattern:|architecture:|design decision)\b/i,
+  /\b(important:|warning:|caveat:|careful with|watch out for)\b/i,
+  /\b(requires|must be|needs to be|config.+should)\b/i,
 ];
 
 // Patterns that indicate entity-rich content (names, projects, technologies)
@@ -627,15 +629,53 @@ const SKIP_PATTERNS = [
   /^\s*$/,
 ];
 
+const SYSTEM_MESSAGE_PATTERNS = [
+  /^System:\s*\[/,                    // System: [timestamp] messages
+  /^OUTCOME:/,                        // Swarm OUTCOME blocks
+  /^DECISION:/,                       // Swarm DECISION blocks
+  /^COMPACTION:/,                     // Context compaction markers
+  /health.?watchdog/i,                // Health watchdog checks
+  /^Exec completed/i,                 // Exec completion logs
+  /heartbeat/i,                       // Heartbeat prompts
+  /^Run ~?\/?.*health-watchdog/i,     // Health watchdog commands
+  /^\[.*\]\s*(Starting|Checking|Running)/, // Bracketed system logs
+  /^Telegram\b/i,                     // Telegram relay messages
+  /^Session \w+ \(\d{4}-/,           // Auto session summaries
+  /^Session ended without summary/,   // Garbage summary placeholder
+  /openclaw system event/i,           // Event notifications
+  /^\[swarm-plugin\]/,                // Plugin's own log output
+  /^<hivemind-context>/,              // Previously injected context
+  /Read HEARTBEAT\.md/i,              // Heartbeat instructions
+  /HEARTBEAT_OK/i,                    // Heartbeat responses
+  /^Worker Monitor/i,                 // Worker monitor logs
+  /Ralph loop monitor/i,              // Ralph loop checks
+];
+
+function isSystemMessage(text: string): boolean {
+  const trimmed = text.trim();
+  for (const pattern of SYSTEM_MESSAGE_PATTERNS) {
+    if (pattern.test(trimmed)) return true;
+  }
+  return false;
+}
+
 function shouldCapture(text: string): boolean {
-  if (text.length < 50) return false;
+  if (text.length < 80) return false;
   for (const pattern of SKIP_PATTERNS) {
     if (pattern.test(text)) return false;
   }
-  for (const pattern of CAPTURE_PATTERNS) {
+  // Block system messages — this is the primary noise filter
+  if (isSystemMessage(text)) return false;
+
+  // Require a strong capture signal
+  for (const pattern of STRONG_CAPTURE_PATTERNS) {
     if (pattern.test(text)) return true;
   }
-  return text.length > 200;
+
+  // Only capture long messages if they're also entity-rich (not just verbose system output)
+  if (text.length > 300 && isEntityRich(text)) return true;
+
+  return false;
 }
 
 function isEntityRich(text: string): boolean {
@@ -649,28 +689,24 @@ function isEntityRich(text: string): boolean {
 function detectTags(text: string): string[] {
   const tags: string[] = ["auto-captured"];
   const lower = text.toLowerCase();
-  if (/\b(prefer|like|want)\b/.test(lower)) tags.push("preference");
-  if (/\b(decision|decided|chose)\b/.test(lower)) tags.push("decision");
-  if (/\b(learned|discovered|found)\b/.test(lower)) tags.push("learning");
-  if (/\b(project|task|todo)\b/.test(lower)) tags.push("task");
+  if (/\b(prefer|always use|never use|convention)\b/.test(lower)) tags.push("preference");
+  if (/\b(decision|decided|chose|approach)\b/.test(lower)) tags.push("decision");
+  if (/\b(learned|discovered|found out|realized|turns out|gotcha|pitfall)\b/.test(lower)) tags.push("learning");
+  if (/\b(gotcha|pitfall|caveat|watch out|careful with|warning)\b/.test(lower)) tags.push("gotcha");
+  if (/\b(architecture|pattern|design decision|system design)\b/.test(lower)) tags.push("architecture");
+  if (/\b(config|configuration|setting|env|environment)\b/.test(lower)) tags.push("config");
   return tags;
 }
 
-function formatRecallContext(results: MemoryResult[]): string {
+function formatRecallContext(results: MemoryResult[], contentLimit = 600): string {
   if (results.length === 0) return "";
   const lines = results.map((r) => {
-    const tags = r.memory.metadata?.tags?.join(", ") || "general";
+    const tags = r.memory.metadata?.tags?.join(",") || "general";
     const score = Math.round(r.score * 100);
-    const content = r.memory.content.slice(0, 300);
-    const decayBadge = r.memory.decayTier === "hot" ? "🔥" : r.memory.decayTier === "warm" ? "🌡️" : r.memory.decayTier === "cold" ? "❄️" : "💤";
-    const tier = r.memory.decayTier || "unknown";
-    return `- ${decayBadge} [${tier}] [${tags}] ${content}${content.length >= 300 ? "..." : ""} (${score}%)`;
+    const content = r.memory.content.slice(0, contentLimit);
+    return `- (${score}%) [${tags}] ${content}${content.length >= contentLimit ? "..." : ""}`;
   });
-  return `<hivemind-context>
-Relevant memories:
-${lines.join("\n")}
-Use naturally when relevant.
-</hivemind-context>`;
+  return `<hivemind-context>\n${lines.join("\n")}\n</hivemind-context>`;
 }
 
 // ============================================================================
@@ -793,13 +829,17 @@ const swarmPlugin = {
     properties: {
       autoRecall: { type: "boolean", default: true, description: "Inject relevant memories before each turn" },
       autoCapture: { type: "boolean", default: true, description: "Store important info after each turn" },
-      maxRecallResults: { type: "number", default: 5, description: "Max memories to inject" },
-      minScore: { type: "number", default: 0.3, description: "Min similarity score for recall" },
+      maxRecallResults: { type: "number", default: 3, description: "Max memories to inject" },
+      minScore: { type: "number", default: 0.55, description: "Min similarity score for recall" },
       dedupScore: { type: "number", default: 0.85, description: "Min similarity to consider duplicate (prevents storing)" },
       memoryScope: { type: "string", default: "global", description: "Memory scope: 'global' (system-wide) or 'project' (per-directory)" },
       globalMemoryPath: { type: "string", description: "Path for global memory (default: ~/clawd)" },
       decayTierFilter: { type: "string", default: "hot", description: "Filter memories by decay tier: hot, warm, cold, stale, or 'all'" },
       extractEntitiesOnCapture: { type: "boolean", default: true, description: "Extract entities from captured memories" },
+      recallCooldownMs: { type: "number", default: 30000, description: "Min ms between recall queries (prevents flooding)" },
+      maxCapturePerTurn: { type: "number", default: 1, description: "Max memories to capture per agent turn" },
+      captureContentLimit: { type: "number", default: 1000, description: "Max chars to store per captured memory" },
+      recallContentLimit: { type: "number", default: 600, description: "Max chars to show per recalled memory" },
       debug: { type: "boolean", default: false, description: "Debug logging" },
     },
     additionalProperties: false,
@@ -809,13 +849,17 @@ const swarmPlugin = {
     const cfg = {
       autoRecall: true,
       autoCapture: true,
-      maxRecallResults: 5,
-      minScore: 0.3,
+      maxRecallResults: 3,
+      minScore: 0.55,
       dedupScore: 0.85,
       memoryScope: "global",
       globalMemoryPath: `${process.env.HOME}/clawd`,
       decayTierFilter: "hot",
       extractEntitiesOnCapture: true,
+      recallCooldownMs: 30000,
+      maxCapturePerTurn: 1,
+      captureContentLimit: 1000,
+      recallContentLimit: 600,
       debug: false,
       ...(api.pluginConfig as Record<string, unknown>),
     };
@@ -859,38 +903,56 @@ const swarmPlugin = {
     // ========================================================================
     // Auto-recall: inject relevant memories before agent starts
     // ========================================================================
+    let lastRecallTime = 0;
+
     if (cfg.autoRecall) {
-      console.log(`[swarm-plugin] Registering before_agent_start hook`);
+      if (cfg.debug) console.log(`[swarm-plugin] Registering before_agent_start hook`);
       api.on("before_agent_start", async (event: Record<string, unknown>) => {
-        console.log(`[swarm-plugin] before_agent_start fired, prompt length: ${(event.prompt as string)?.length || 0}`);
         const prompt = event.prompt as string | undefined;
-        if (!prompt || prompt.length < 10) {
-          console.log(`[swarm-plugin] Skipping recall: prompt too short`);
+        if (!prompt || prompt.length < 30) {
+          if (cfg.debug) console.log(`[swarm-plugin] Skipping recall: prompt too short`);
           return;
         }
 
+        // Gate: skip system messages
+        if (isSystemMessage(prompt)) {
+          if (cfg.debug) console.log(`[swarm-plugin] Skipping recall: system message`);
+          return;
+        }
+
+        // Gate: cooldown between recall queries
+        const now = Date.now();
+        const cooldown = (cfg.recallCooldownMs as number) || 30000;
+        if (now - lastRecallTime < cooldown) {
+          if (cfg.debug) console.log(`[swarm-plugin] Skipping recall: cooldown (${Math.round((cooldown - (now - lastRecallTime)) / 1000)}s remaining)`);
+          return;
+        }
+        lastRecallTime = now;
+
         try {
-          console.log(`[swarm-plugin] Querying hivemind for: ${prompt.slice(0, 50)}...`);
-          const findParams: Record<string, unknown> = { query: prompt, limit: cfg.maxRecallResults };
+          // Truncate query to first 200 chars — full prompts are noisy
+          const queryText = prompt.slice(0, 200);
+          if (cfg.debug) console.log(`[swarm-plugin] Querying hivemind for: ${queryText.slice(0, 50)}...`);
+          const findParams: Record<string, unknown> = { query: queryText, limit: cfg.maxRecallResults };
           if (cfg.decayTierFilter && cfg.decayTierFilter !== "all") {
             findParams.decayTier = cfg.decayTierFilter;
           }
           const result = swarmMemory("find", findParams);
-          console.log(`[swarm-plugin] Hivemind result: success=${result.success}`);
+          if (cfg.debug) console.log(`[swarm-plugin] Hivemind result: success=${result.success}`);
           if (!result.success) return;
 
           // swarm memory find returns { success, results } not { success, data: { results } }
           const parsed = result as unknown as { success: boolean; results?: MemoryResult[] };
           const results = (parsed.results || []).filter((r) => r.score >= cfg.minScore);
-          console.log(`[swarm-plugin] Found ${results.length} memories above ${cfg.minScore} threshold`);
+          if (cfg.debug) console.log(`[swarm-plugin] Found ${results.length} memories above ${cfg.minScore} threshold`);
           if (results.length === 0) return;
 
-          const context = formatRecallContext(results);
-          console.log(`[swarm-plugin] Injecting ${results.length} memories (${context.length} chars)`);
+          const context = formatRecallContext(results, cfg.recallContentLimit as number);
+          if (cfg.debug) console.log(`[swarm-plugin] Injecting ${results.length} memories (${context.length} chars)`);
 
           return { prependContext: context };
         } catch (err) {
-          console.log(`[swarm-plugin] Recall error: ${err}`);
+          if (cfg.debug) console.log(`[swarm-plugin] Recall error: ${err}`);
         }
       });
     }
@@ -908,17 +970,19 @@ const swarmPlugin = {
             if (!msg || typeof msg !== "object") continue;
             const msgObj = msg as Record<string, unknown>;
             const role = msgObj.role;
-            if (role !== "user" && role !== "assistant") continue;
+            // Only capture assistant responses — user messages and system are noise
+            if (role !== "assistant") continue;
 
             const content = msgObj.content;
             if (typeof content === "string") {
-              texts.push(content);
+              if (!isSystemMessage(content)) texts.push(content);
             } else if (Array.isArray(content)) {
               for (const block of content) {
                 if (block && typeof block === "object" &&
                     (block as Record<string, unknown>).type === "text" &&
                     typeof (block as Record<string, unknown>).text === "string") {
-                  texts.push((block as Record<string, unknown>).text as string);
+                  const t = (block as Record<string, unknown>).text as string;
+                  if (!isSystemMessage(t)) texts.push(t);
                 }
               }
             }
@@ -927,10 +991,12 @@ const swarmPlugin = {
           const toCapture = texts.filter((t) => shouldCapture(t) && !t.includes("<hivemind-context>"));
           if (toCapture.length === 0) return;
 
+          const maxCaptures = (cfg.maxCapturePerTurn as number) || 1;
+          const contentLimit = (cfg.captureContentLimit as number) || 1000;
           let stored = 0;
           let skippedDupes = 0;
-          for (const text of toCapture.slice(0, 2)) {
-            const truncated = text.slice(0, 500);
+          for (const text of toCapture.slice(0, maxCaptures)) {
+            const truncated = text.slice(0, contentLimit);
 
             // Check for duplicates before storing
             if (isDuplicate(truncated, cfg.dedupScore as number)) {
