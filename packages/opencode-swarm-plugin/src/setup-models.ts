@@ -12,9 +12,14 @@ export interface ModelOption {
 
 const ZHIPU_MODELS: ModelOption[] = [
   {
+    value: "zai-coding-plan/glm-5",
+    label: "Z.ai GLM-5",
+    hint: "Latest GLM model (coding plan)",
+  },
+  {
     value: "zai-coding-plan/glm-4.7",
     label: "Z.ai GLM-4.7",
-    hint: "Latest GLM model (coding plan)",
+    hint: "GLM model",
   },
   {
     value: "zai-coding-plan/glm-4.7-flash",
